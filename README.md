@@ -2,6 +2,14 @@
 
 ActionGuard is an open-source Zero Trust security platform that helps applications continuously detect, evaluate, and contain suspicious user and account activity.
 
+## Getting Started
+
+```bash
+npm install
+docker compose up
+```
+
+
 Instead of trusting a user or session after authentication, ActionGuard continuously evaluates the security context of sessions and sensitive actions using signals such as device, location, behavior, timing, and recent activity.
 
 Based on the current risk, ActionGuard can allow, monitor, require re-verification, delay, or block an action. It also provides explainable security decisions for both users and administrators.

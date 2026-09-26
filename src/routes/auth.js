@@ -1,0 +1,139 @@
+const express = require('express');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const { User } = require('../database/models');
+const { sendError } = require('../utils/errors');
+const { JWT_SECRET, authenticateToken } = require('../middleware/auth');
+const {
+  createSession,
+  invalidateSession,
+  DEFAULT_SESSION_TTL_SECONDS
+} = require('../services/sessionService');
+
+const router = express.Router();
+const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || `${DEFAULT_SESSION_TTL_SECONDS}s`;
+
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/**
+ * POST /api/v1/auth/signup
+ */
+router.post('/signup', async (req, res) => {
+  try {
+    const { email, password } = req.body || {};
+
+    if (!email || typeof email !== 'string' || !EMAIL_REGEX.test(email)) {
+      return sendError(res, 400, 'invalid_request', 'A valid email address is required');
+    }
+
+    if (!password || typeof password !== 'string' || password.length < 6) {
+      return sendError(
+        res,
+        400,
+        'invalid_request',
+        'Password must be at least 6 characters long'
+      );
+    }
+
+    const normalizedEmail = email.toLowerCase().trim();
+
+    // Check for existing user
+    const existingUser = await User.findOne({ where: { email: normalizedEmail } });
+    if (existingUser) {
+      return sendError(res, 400, 'duplicate_email', 'A user with this email already exists');
+    }
+
+    // Hash password
+    const saltRounds = 10;
+    const passwordHash = await bcrypt.hash(password, saltRounds);
+
+    // Create user
+    const newUser = await User.create({
+      email: normalizedEmail,
+      password_hash: passwordHash
+    });
+
+    return res.status(201).json({
+      id: newUser.id,
+      email: newUser.email
+    });
+  } catch (error) {
+    console.error('Signup error:', error);
+    return sendError(res, 500, 'internal_error', 'An unexpected error occurred during signup');
+  }
+});
+
+/**
+ * POST /api/v1/auth/login
+ */
+router.post('/login', async (req, res) => {
+  try {
+    const { email, password } = req.body || {};
+
+    if (!email || !password || typeof email !== 'string' || typeof password !== 'string') {
+      return sendError(res, 400, 'invalid_request', 'Email and password are required');
+    }
+
+    const normalizedEmail = email.toLowerCase().trim();
+
+    const user = await User.findOne({ where: { email: normalizedEmail } });
+    if (!user) {
+      // Generic error - do not reveal if email exists
+      return sendError(res, 401, 'authentication_failed', 'Invalid email or password');
+    }
+
+    const isMatch = await bcrypt.compare(password, user.password_hash);
+    if (!isMatch) {
+      // Generic error - do not reveal password was wrong
+      return sendError(res, 401, 'authentication_failed', 'Invalid email or password');
+    }
+
+    // Create session in MySQL & Redis
+    const session = await createSession(user.id, user.email, DEFAULT_SESSION_TTL_SECONDS);
+
+    // Issue short-lived JWT containing user id, email, and session_id
+    const tokenPayload = {
+      id: user.id,
+      email: user.email,
+      session_id: session.sessionId
+    };
+
+    const token = jwt.sign(tokenPayload, JWT_SECRET, {
+      expiresIn: JWT_EXPIRES_IN
+    });
+
+    return res.status(200).json({
+      token,
+      session_id: session.sessionId,
+      user: {
+        id: user.id,
+        email: user.email
+      }
+    });
+  } catch (error) {
+    console.error('Login error:', error);
+    return sendError(res, 500, 'internal_error', 'An unexpected error occurred during login');
+  }
+});
+
+/**
+ * POST /api/v1/auth/logout
+ */
+router.post('/logout', authenticateToken, async (req, res) => {
+  try {
+    const sessionId = req.user && req.user.session_id;
+
+    if (sessionId) {
+      await invalidateSession(sessionId);
+    }
+
+    return res.status(200).json({
+      message: 'Successfully logged out'
+    });
+  } catch (error) {
+    console.error('Logout error:', error);
+    return sendError(res, 500, 'internal_error', 'An unexpected error occurred during logout');
+  }
+});
+
+module.exports = router;
