@@ -9,11 +9,19 @@ const {
   invalidateSession,
   DEFAULT_SESSION_TTL_SECONDS
 } = require('../services/sessionService');
+const { recordSecurityEvent } = require('../services/eventService');
 
 const router = express.Router();
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || `${DEFAULT_SESSION_TTL_SECONDS}s`;
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function extractRequestContext(req) {
+  return {
+    ip_address: req.ip || req.socket?.remoteAddress || null,
+    user_agent: req.headers['user-agent'] || null
+  };
+}
 
 /**
  * POST /api/v1/auth/signup
@@ -84,12 +92,35 @@ router.post('/login', async (req, res) => {
 
     const isMatch = await bcrypt.compare(password, user.password_hash);
     if (!isMatch) {
+      await recordSecurityEvent({
+        userId: user.id,
+        eventType: 'login_failed',
+        context: extractRequestContext(req)
+      });
       // Generic error - do not reveal password was wrong
       return sendError(res, 401, 'authentication_failed', 'Invalid email or password');
     }
 
     // Create session in MySQL & Redis
     const session = await createSession(user.id, user.email, DEFAULT_SESSION_TTL_SECONDS);
+
+    const context = extractRequestContext(req);
+
+    // Record login_success
+    await recordSecurityEvent({
+      userId: user.id,
+      sessionId: session.sessionId,
+      eventType: 'login_success',
+      context
+    });
+
+    // Record session_created
+    await recordSecurityEvent({
+      userId: user.id,
+      sessionId: session.sessionId,
+      eventType: 'session_created',
+      context
+    });
 
     // Issue short-lived JWT containing user id, email, and session_id
     const tokenPayload = {
@@ -122,9 +153,17 @@ router.post('/login', async (req, res) => {
 router.post('/logout', authenticateToken, async (req, res) => {
   try {
     const sessionId = req.user && req.user.session_id;
+    const userId = req.user && req.user.id;
 
     if (sessionId) {
       await invalidateSession(sessionId);
+
+      await recordSecurityEvent({
+        userId,
+        sessionId,
+        eventType: 'session_terminated',
+        context: extractRequestContext(req)
+      });
     }
 
     return res.status(200).json({
