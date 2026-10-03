@@ -14,6 +14,9 @@ services:
       - DB_NAME=actionguard
       - REDIS_URL=redis://redis:6379
       - JWT_SECRET=change_this_to_a_secure_jwt_secret
+      - MAXMIND_DB_PATH=${MAXMIND_DB_PATH:-/app/data/GeoLite2-City.mmdb}
+    volumes:
+      - ./data:/app/data:ro
     depends_on:
       - mysql
       - redis

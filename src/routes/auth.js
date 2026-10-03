@@ -14,6 +14,8 @@ const {
   validateDeviceFingerprint,
   getOrCreateDevice
 } = require('../services/deviceService');
+const { normalizeIp } = require('../utils/ip');
+const geoService = require('../services/geoService');
 
 const router = express.Router();
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || `${DEFAULT_SESSION_TTL_SECONDS}s`;
@@ -21,8 +23,11 @@ const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || `${DEFAULT_SESSION_TTL_SECO
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function extractRequestContext(req, explicitFingerprint = null) {
+  const rawIp = req.ip || req.socket?.remoteAddress || null;
+  const ip = normalizeIp(rawIp) || (typeof rawIp === 'string' ? rawIp.trim() : null);
+
   const context = {
-    ip_address: req.ip || req.socket?.remoteAddress || null,
+    ip_address: ip,
     user_agent: req.headers['user-agent'] || null
   };
 
@@ -31,6 +36,20 @@ function extractRequestContext(req, explicitFingerprint = null) {
     context.device_fingerprint = fingerprint;
   }
 
+  return context;
+}
+
+async function extractLoginRequestContext(req, explicitFingerprint = null) {
+  const context = extractRequestContext(req, explicitFingerprint);
+  if (context.ip_address) {
+    const geo = await geoService.resolveGeoLocation(context.ip_address);
+    if (geo.geo_country) {
+      context.geo_country = geo.geo_country;
+    }
+    if (geo.geo_region) {
+      context.geo_region = geo.geo_region;
+    }
+  }
   return context;
 }
 
@@ -106,10 +125,11 @@ router.post('/login', async (req, res) => {
 
     const isMatch = await bcrypt.compare(password, user.password_hash);
     if (!isMatch) {
+      const loginContext = await extractLoginRequestContext(req, validFingerprint);
       await recordSecurityEvent({
         userId: user.id,
         eventType: 'login_failed',
-        context: extractRequestContext(req, validFingerprint)
+        context: loginContext
       });
       // Generic error - do not reveal password was wrong
       return sendError(res, 401, 'authentication_failed', 'Invalid email or password');
@@ -127,14 +147,14 @@ router.post('/login', async (req, res) => {
     // Create session in MySQL & Redis
     const session = await createSession(user.id, user.email, DEFAULT_SESSION_TTL_SECONDS, deviceData);
 
-    const context = extractRequestContext(req, validFingerprint);
+    const loginContext = await extractLoginRequestContext(req, validFingerprint);
 
     // Record login_success
     await recordSecurityEvent({
       userId: user.id,
       sessionId: session.sessionId,
       eventType: 'login_success',
-      context
+      context: loginContext
     });
 
     // Record session_created
@@ -142,7 +162,7 @@ router.post('/login', async (req, res) => {
       userId: user.id,
       sessionId: session.sessionId,
       eventType: 'session_created',
-      context
+      context: extractRequestContext(req, validFingerprint)
     });
 
     // Issue short-lived JWT containing user id, email, and session_id
