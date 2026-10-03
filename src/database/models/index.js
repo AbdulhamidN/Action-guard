@@ -2,10 +2,12 @@ const sequelize = require('../index');
 const initUserModel = require('./User');
 const initSessionModel = require('./Session');
 const initDeviceModel = require('./Device');
+const initSecurityEventModel = require('./SecurityEvent');
 
 const User = initUserModel(sequelize);
 const Session = initSessionModel(sequelize);
 const Device = initDeviceModel(sequelize);
+const SecurityEvent = initSecurityEventModel(sequelize);
 
 // Associations
 User.hasMany(Session, {
@@ -28,9 +30,30 @@ Device.belongsTo(User, {
   as: 'user'
 });
 
+User.hasMany(SecurityEvent, {
+  foreignKey: 'user_id',
+  as: 'securityEvents',
+  onDelete: 'CASCADE'
+});
+SecurityEvent.belongsTo(User, {
+  foreignKey: 'user_id',
+  as: 'user'
+});
+
+Session.hasMany(SecurityEvent, {
+  foreignKey: 'session_id',
+  as: 'securityEvents',
+  onDelete: 'SET NULL'
+});
+SecurityEvent.belongsTo(Session, {
+  foreignKey: 'session_id',
+  as: 'session'
+});
+
 module.exports = {
   sequelize,
   User,
   Session,
-  Device
+  Device,
+  SecurityEvent
 };
