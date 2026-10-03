@@ -10,10 +10,11 @@ const DEFAULT_SESSION_TTL_SECONDS = parseInt(process.env.SESSION_TTL_SECONDS || 
  *
  * @param {string} userId
  * @param {string} email
- * @param {number} ttlSeconds
+ * @param {number} [ttlSeconds]
+ * @param {object|null} [deviceData] - Optional device association { device_id, device_fingerprint }
  * @returns {Promise<{ sessionId: string, expiresAt: Date, ttlSeconds: number }>}
  */
-async function createSession(userId, email, ttlSeconds = DEFAULT_SESSION_TTL_SECONDS) {
+async function createSession(userId, email, ttlSeconds = DEFAULT_SESSION_TTL_SECONDS, deviceData = null) {
   const sessionId = `sess_${crypto.randomUUID()}`;
   const now = new Date();
   const expiresAt = new Date(now.getTime() + ttlSeconds * 1000);
@@ -36,6 +37,17 @@ async function createSession(userId, email, ttlSeconds = DEFAULT_SESSION_TTL_SEC
     expires_at: expiresAt.toISOString(),
     is_active: true
   };
+
+  if (deviceData) {
+    const deviceId = deviceData.device_id || deviceData.deviceId;
+    const deviceFingerprint = deviceData.device_fingerprint || deviceData.deviceFingerprint || deviceData.fingerprint;
+    if (deviceId) {
+      sessionData.device_id = deviceId;
+    }
+    if (deviceFingerprint) {
+      sessionData.device_fingerprint = deviceFingerprint;
+    }
+  }
 
   await storeSession(sessionId, sessionData, ttlSeconds);
 

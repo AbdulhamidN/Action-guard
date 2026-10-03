@@ -10,17 +10,28 @@ const {
   DEFAULT_SESSION_TTL_SECONDS
 } = require('../services/sessionService');
 const { recordSecurityEvent } = require('../services/eventService');
+const {
+  validateDeviceFingerprint,
+  getOrCreateDevice
+} = require('../services/deviceService');
 
 const router = express.Router();
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || `${DEFAULT_SESSION_TTL_SECONDS}s`;
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-function extractRequestContext(req) {
-  return {
+function extractRequestContext(req, explicitFingerprint = null) {
+  const context = {
     ip_address: req.ip || req.socket?.remoteAddress || null,
     user_agent: req.headers['user-agent'] || null
   };
+
+  const fingerprint = explicitFingerprint || (req.session && req.session.device_fingerprint) || null;
+  if (fingerprint) {
+    context.device_fingerprint = fingerprint;
+  }
+
+  return context;
 }
 
 /**
@@ -82,6 +93,9 @@ router.post('/login', async (req, res) => {
       return sendError(res, 400, 'invalid_request', 'Email and password are required');
     }
 
+    const rawFingerprint = req.headers['x-device-fingerprint'];
+    const validFingerprint = validateDeviceFingerprint(rawFingerprint) ? rawFingerprint.trim() : null;
+
     const normalizedEmail = email.toLowerCase().trim();
 
     const user = await User.findOne({ where: { email: normalizedEmail } });
@@ -95,16 +109,25 @@ router.post('/login', async (req, res) => {
       await recordSecurityEvent({
         userId: user.id,
         eventType: 'login_failed',
-        context: extractRequestContext(req)
+        context: extractRequestContext(req, validFingerprint)
       });
       // Generic error - do not reveal password was wrong
       return sendError(res, 401, 'authentication_failed', 'Invalid email or password');
     }
 
-    // Create session in MySQL & Redis
-    const session = await createSession(user.id, user.email, DEFAULT_SESSION_TTL_SECONDS);
+    let deviceData = null;
+    if (validFingerprint) {
+      const { device } = await getOrCreateDevice(user.id, validFingerprint);
+      deviceData = {
+        device_id: device.id,
+        device_fingerprint: validFingerprint
+      };
+    }
 
-    const context = extractRequestContext(req);
+    // Create session in MySQL & Redis
+    const session = await createSession(user.id, user.email, DEFAULT_SESSION_TTL_SECONDS, deviceData);
+
+    const context = extractRequestContext(req, validFingerprint);
 
     // Record login_success
     await recordSecurityEvent({
@@ -156,13 +179,18 @@ router.post('/logout', authenticateToken, async (req, res) => {
     const userId = req.user && req.user.id;
 
     if (sessionId) {
+      const sessionFingerprint = req.session?.device_fingerprint || null;
+      const rawFingerprint = req.headers['x-device-fingerprint'];
+      const validHeaderFingerprint = validateDeviceFingerprint(rawFingerprint) ? rawFingerprint.trim() : null;
+      const deviceFingerprint = sessionFingerprint || validHeaderFingerprint;
+
       await invalidateSession(sessionId);
 
       await recordSecurityEvent({
         userId,
         sessionId,
         eventType: 'session_terminated',
-        context: extractRequestContext(req)
+        context: extractRequestContext(req, deviceFingerprint)
       });
     }
 
