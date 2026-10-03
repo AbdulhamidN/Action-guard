@@ -5,7 +5,7 @@ module.exports = {
     // 1. users table
     await queryInterface.createTable('users', {
       id: {
-        type: DataTypes.STRING(36),
+        type: DataTypes.STRING(64),
         primaryKey: true,
         allowNull: false
       },
@@ -33,12 +33,12 @@ module.exports = {
     // 2. sessions table
     await queryInterface.createTable('sessions', {
       id: {
-        type: DataTypes.STRING(36),
+        type: DataTypes.STRING(64),
         primaryKey: true,
         allowNull: false
       },
       user_id: {
-        type: DataTypes.STRING(36),
+        type: DataTypes.STRING(64),
         allowNull: false,
         references: {
           model: 'users',
@@ -66,12 +66,12 @@ module.exports = {
     // 3. devices table
     await queryInterface.createTable('devices', {
       id: {
-        type: DataTypes.STRING(36),
+        type: DataTypes.STRING(64),
         primaryKey: true,
         allowNull: false
       },
       user_id: {
-        type: DataTypes.STRING(36),
+        type: DataTypes.STRING(64),
         allowNull: false,
         references: {
           model: 'users',

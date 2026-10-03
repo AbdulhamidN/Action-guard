@@ -10,10 +10,10 @@ const { JWT_SECRET } = require('../src/middleware/auth');
 describe('Sub-module 1.4 — Session Creation & Redis Storage', () => {
   beforeAll(async () => {
     await runMigrations();
-  });
-
-  afterAll(async () => {
-    await sequelize.close();
+    await sequelize.query('SET FOREIGN_KEY_CHECKS = 0');
+    await Session.destroy({ where: {}, force: true });
+    await User.destroy({ where: {}, force: true });
+    await sequelize.query('SET FOREIGN_KEY_CHECKS = 1');
   });
 
   test('complete flow: signup -> login -> session created -> GET /api/v1/me -> logout -> old session rejected', async () => {

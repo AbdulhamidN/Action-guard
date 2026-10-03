@@ -122,7 +122,7 @@ Important areas include:
 
 When modifying the repository:
 
-1. Read the relevant documentation before changing architecture.
+1. Read the relevant documentation (`docs/requirements.md`, `docs/security-model.md`, `docs/architecture.md`, `docs/api-contract.md`) before changing architecture.
 2. Understand existing code before creating new modules.
 3. Reuse existing functionality instead of duplicating it.
 4. Preserve existing security boundaries.

@@ -4,12 +4,12 @@ const { runSeeds } = require('../src/database/seed');
 
 describe('Sub-module 1.2 — Data Model (MySQL/Sequelize)', () => {
   beforeAll(async () => {
-    // Run migrations to create tables
     await runMigrations();
-  });
-
-  afterAll(async () => {
-    await sequelize.close();
+    await sequelize.query('SET FOREIGN_KEY_CHECKS = 0');
+    await Session.destroy({ where: {}, force: true });
+    await Device.destroy({ where: {}, force: true });
+    await User.destroy({ where: {}, force: true });
+    await sequelize.query('SET FOREIGN_KEY_CHECKS = 1');
   });
 
   test('tables users, sessions, devices exist in the schema', async () => {

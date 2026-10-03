@@ -9,10 +9,9 @@ const { authenticateToken, JWT_SECRET } = require('../src/middleware/auth');
 describe('Sub-module 1.3 — Authentication', () => {
   beforeAll(async () => {
     await runMigrations();
-  });
-
-  afterAll(async () => {
-    await sequelize.close();
+    await sequelize.query('SET FOREIGN_KEY_CHECKS = 0');
+    await User.destroy({ where: {}, force: true });
+    await sequelize.query('SET FOREIGN_KEY_CHECKS = 1');
   });
 
   describe('POST /api/v1/auth/signup', () => {

@@ -1,5 +1,66 @@
 const Redis = require('ioredis');
-const RedisMock = require('ioredis-mock');
+
+/**
+ * Built-in in-memory client used exclusively for test isolation
+ * without introducing unapproved third-party packages.
+ */
+class InMemoryRedisClient {
+  constructor() {
+    this.store = new Map();
+  }
+
+  async set(key, value, mode, duration) {
+    let expiresAt = null;
+    if (mode === 'EX' && duration) {
+      expiresAt = Date.now() + duration * 1000;
+    } else if (mode === 'PX' && duration) {
+      expiresAt = Date.now() + duration;
+    }
+    this.store.set(key, { value, expiresAt });
+    return 'OK';
+  }
+
+  async get(key) {
+    const item = this.store.get(key);
+    if (!item) return null;
+    if (item.expiresAt && Date.now() > item.expiresAt) {
+      this.store.delete(key);
+      return null;
+    }
+    return item.value;
+  }
+
+  async del(key) {
+    const exists = this.store.has(key);
+    this.store.delete(key);
+    return exists ? 1 : 0;
+  }
+
+  async ttl(key) {
+    const item = this.store.get(key);
+    if (!item) return -2;
+    if (!item.expiresAt) return -1;
+    const remainingMs = item.expiresAt - Date.now();
+    if (remainingMs <= 0) {
+      this.store.delete(key);
+      return -2;
+    }
+    return Math.ceil(remainingMs / 1000);
+  }
+
+  on() {
+    return this;
+  }
+
+  async quit() {
+    this.store.clear();
+    return 'OK';
+  }
+
+  disconnect() {
+    this.store.clear();
+  }
+}
 
 let redisClient;
 
@@ -9,16 +70,17 @@ function getRedisClient() {
   }
 
   const isTest = process.env.NODE_ENV === 'test';
-  const useMock = process.env.USE_REDIS_MOCK === 'true' || isTest;
+  const useMock = process.env.USE_REDIS_MOCK === 'true' || (isTest && process.env.USE_REAL_REDIS !== 'true');
 
   if (useMock) {
-    redisClient = new RedisMock();
+    redisClient = new InMemoryRedisClient();
   } else {
     const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379';
     redisClient = new Redis(redisUrl, {
       maxRetriesPerRequest: 3,
       enableReadyCheck: true,
-      lazyConnect: true
+      lazyConnect: true,
+      retryStrategy: (times) => Math.min(times * 200, 3000)
     });
 
     redisClient.on('error', (err) => {
