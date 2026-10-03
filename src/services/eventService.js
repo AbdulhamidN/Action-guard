@@ -1,3 +1,4 @@
+const { Op } = require('sequelize');
 const { SecurityEvent } = require('../database/models');
 
 /**
@@ -57,6 +58,80 @@ async function recordSecurityEvent(eventData = {}) {
   return event;
 }
 
+/**
+ * Queries security events with filtering, pagination, and deterministic ordering.
+ *
+ * @param {object} [filters={}]
+ * @param {string} [filters.user_id]
+ * @param {string} [filters.session_id]
+ * @param {string} [filters.event_type]
+ * @param {string|Date} [filters.from]
+ * @param {string|Date} [filters.to]
+ * @param {object} [pagination={}]
+ * @param {number|string} [pagination.limit=50]
+ * @param {number|string} [pagination.offset=0]
+ * @returns {Promise<{ events: Array, total: number, limit: number, offset: number }>}
+ */
+async function querySecurityEvents(filters = {}, pagination = {}) {
+  const where = {};
+
+  if (filters.user_id) {
+    where.user_id = filters.user_id;
+  }
+
+  if (filters.session_id) {
+    where.session_id = filters.session_id;
+  }
+
+  if (filters.event_type) {
+    where.event_type = filters.event_type;
+  }
+
+  if (filters.from || filters.to) {
+    where.timestamp = {};
+    if (filters.from) {
+      where.timestamp[Op.gte] = new Date(filters.from);
+    }
+    if (filters.to) {
+      where.timestamp[Op.lte] = new Date(filters.to);
+    }
+  }
+
+  const rawLimit = parseInt(pagination.limit, 10);
+  const limit = isNaN(rawLimit) ? 50 : Math.min(Math.max(rawLimit, 1), 100);
+
+  const rawOffset = parseInt(pagination.offset, 10);
+  const offset = isNaN(rawOffset) ? 0 : Math.max(rawOffset, 0);
+
+  const { rows, count } = await SecurityEvent.findAndCountAll({
+    where,
+    limit,
+    offset,
+    order: [
+      ['timestamp', 'DESC'],
+      ['event_id', 'DESC']
+    ]
+  });
+
+  const events = rows.map((r) => ({
+    event_id: r.event_id,
+    user_id: r.user_id,
+    session_id: r.session_id,
+    event_type: r.event_type,
+    timestamp: r.timestamp instanceof Date ? r.timestamp.toISOString() : new Date(r.timestamp).toISOString(),
+    context: r.context || {},
+    metadata: r.metadata || {}
+  }));
+
+  return {
+    events,
+    total: count,
+    limit,
+    offset
+  };
+}
+
 module.exports = {
-  recordSecurityEvent
+  recordSecurityEvent,
+  querySecurityEvents
 };

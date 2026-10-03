@@ -51,7 +51,39 @@ async function authenticateToken(req, res, next) {
   next();
 }
 
+/**
+ * Verifies service-level API key for external integrating application requests.
+ * Rejects requests if API key is unconfigured, missing, or mismatched.
+ */
+function authenticateApiKey(req, res, next) {
+  const authHeader = req.headers['authorization'];
+  if (!authHeader) {
+    return sendError(res, 401, 'unauthorized', 'Missing authorization token');
+  }
+
+  const parts = authHeader.split(' ');
+  if (parts.length !== 2 || parts[0] !== 'Bearer') {
+    return sendError(
+      res,
+      401,
+      'unauthorized',
+      'Malformed authorization token. Expected Bearer <api_key>'
+    );
+  }
+
+  const providedKey = parts[1];
+  const configuredKey = process.env.API_KEY || process.env.ACTIONGUARD_API_KEY;
+
+  if (!configuredKey || providedKey !== configuredKey) {
+    return sendError(res, 401, 'unauthorized', 'Invalid or unconfigured API key');
+  }
+
+  req.apiKey = providedKey;
+  next();
+}
+
 module.exports = {
   authenticateToken,
+  authenticateApiKey,
   JWT_SECRET
 };

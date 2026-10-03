@@ -2,6 +2,7 @@ const express = require('express');
 const helmet = require('helmet');
 const authRouter = require('./routes/auth');
 const meRouter = require('./routes/me');
+const eventsRouter = require('./routes/events');
 
 const app = express();
 
@@ -20,5 +21,8 @@ app.use('/api/v1/auth', authRouter);
 
 // Protected user route
 app.use('/api/v1/me', meRouter);
+
+// Security events query route (PEP route layer)
+app.use('/api/v1/events', eventsRouter);
 
 module.exports = app;
