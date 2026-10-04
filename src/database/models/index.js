@@ -3,11 +3,13 @@ const initUserModel = require('./User');
 const initSessionModel = require('./Session');
 const initDeviceModel = require('./Device');
 const initSecurityEventModel = require('./SecurityEvent');
+const initBehavioralBaselineModel = require('./BehavioralBaseline');
 
 const User = initUserModel(sequelize);
 const Session = initSessionModel(sequelize);
 const Device = initDeviceModel(sequelize);
 const SecurityEvent = initSecurityEventModel(sequelize);
+const BehavioralBaseline = initBehavioralBaselineModel(sequelize);
 
 // Associations
 User.hasMany(Session, {
@@ -50,10 +52,22 @@ SecurityEvent.belongsTo(Session, {
   as: 'session'
 });
 
+// 1-to-1 User <-> BehavioralBaseline
+User.hasOne(BehavioralBaseline, {
+  foreignKey: 'user_id',
+  as: 'baseline',
+  onDelete: 'CASCADE'
+});
+BehavioralBaseline.belongsTo(User, {
+  foreignKey: 'user_id',
+  as: 'user'
+});
+
 module.exports = {
   sequelize,
   User,
   Session,
   Device,
-  SecurityEvent
+  SecurityEvent,
+  BehavioralBaseline
 };
