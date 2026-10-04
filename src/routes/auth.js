@@ -17,6 +17,7 @@ const {
 const { normalizeIp } = require('../utils/ip');
 const geoService = require('../services/geoService');
 const { collectTravelAnomalySignal } = require('../collectors/travelCollector');
+const { collectBotSignal } = require('../collectors/botCollector');
 
 const router = express.Router();
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || `${DEFAULT_SESSION_TTL_SECONDS}s`;
@@ -113,6 +114,19 @@ router.post('/login', async (req, res) => {
       return sendError(res, 400, 'invalid_request', 'Email and password are required');
     }
 
+    // Single request arrival timestamp and canonical source identity for the request
+    const currentTimestamp = new Date();
+    const rawIp = req.ip || req.socket?.remoteAddress || null;
+    const canonicalIp = normalizeIp(rawIp) || (typeof rawIp === 'string' ? rawIp.trim() : null);
+
+    let botSignal = null;
+    try {
+      botSignal = await collectBotSignal(canonicalIp, currentTimestamp);
+    } catch (botErr) {
+      // Safe fallback: never disrupt authentication on bot signal collection failure
+      console.warn('[Auth] Bot signal collection failed:', botErr.message);
+    }
+
     const rawFingerprint = req.headers['x-device-fingerprint'];
     const validFingerprint = validateDeviceFingerprint(rawFingerprint) ? rawFingerprint.trim() : null;
 
@@ -127,10 +141,16 @@ router.post('/login', async (req, res) => {
     const isMatch = await bcrypt.compare(password, user.password_hash);
     if (!isMatch) {
       const loginContext = await extractLoginRequestContext(req, validFingerprint);
+      const failedMetadata = {};
+      if (botSignal) {
+        failedMetadata.bot_detection = botSignal;
+      }
       await recordSecurityEvent({
         userId: user.id,
         eventType: 'login_failed',
-        context: loginContext
+        timestamp: currentTimestamp,
+        context: loginContext,
+        metadata: failedMetadata
       });
       // Generic error - do not reveal password was wrong
       return sendError(res, 401, 'authentication_failed', 'Invalid email or password');
@@ -150,9 +170,6 @@ router.post('/login', async (req, res) => {
 
     const loginContext = await extractLoginRequestContext(req, validFingerprint);
 
-    // Single current login timestamp used for detection and event recording
-    const currentTimestamp = new Date();
-
     let travelAnomaly = null;
     try {
       travelAnomaly = await collectTravelAnomalySignal(
@@ -168,6 +185,9 @@ router.post('/login', async (req, res) => {
     const loginMetadata = {};
     if (travelAnomaly) {
       loginMetadata.travel_anomaly = travelAnomaly;
+    }
+    if (botSignal) {
+      loginMetadata.bot_detection = botSignal;
     }
 
     // Record login_success
