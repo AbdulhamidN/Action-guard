@@ -16,6 +16,7 @@ const {
 } = require('../services/deviceService');
 const { normalizeIp } = require('../utils/ip');
 const geoService = require('../services/geoService');
+const { collectTravelAnomalySignal } = require('../collectors/travelCollector');
 
 const router = express.Router();
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || `${DEFAULT_SESSION_TTL_SECONDS}s`;
@@ -149,12 +150,34 @@ router.post('/login', async (req, res) => {
 
     const loginContext = await extractLoginRequestContext(req, validFingerprint);
 
+    // Single current login timestamp used for detection and event recording
+    const currentTimestamp = new Date();
+
+    let travelAnomaly = null;
+    try {
+      travelAnomaly = await collectTravelAnomalySignal(
+        user.id,
+        loginContext.ip_address,
+        currentTimestamp
+      );
+    } catch (travelErr) {
+      // Safe fallback: never disrupt authentication on travel calculation failure
+      console.warn('[Auth] Impossible travel check failed:', travelErr.message);
+    }
+
+    const loginMetadata = {};
+    if (travelAnomaly) {
+      loginMetadata.travel_anomaly = travelAnomaly;
+    }
+
     // Record login_success
     await recordSecurityEvent({
       userId: user.id,
       sessionId: session.sessionId,
       eventType: 'login_success',
-      context: loginContext
+      timestamp: currentTimestamp,
+      context: loginContext,
+      metadata: loginMetadata
     });
 
     // Record session_created
@@ -162,6 +185,7 @@ router.post('/login', async (req, res) => {
       userId: user.id,
       sessionId: session.sessionId,
       eventType: 'session_created',
+      timestamp: currentTimestamp,
       context: extractRequestContext(req, validFingerprint)
     });
 

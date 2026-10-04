@@ -146,11 +146,54 @@ async function resolveGeoLocation(rawIp) {
   }
 }
 
+/**
+ * Internal coordinate lookup helper used exclusively for impossible-travel calculation.
+ * Never exposed through public APIs or persisted in security event context/metadata.
+ *
+ * @param {string} rawIp - The client IP address
+ * @returns {Promise<{ latitude: number, longitude: number }|null>}
+ */
+async function resolveCoordinates(rawIp) {
+  const normalized = normalizeIp(rawIp);
+
+  if (!normalized || isPrivateOrLoopbackIp(normalized)) {
+    return null;
+  }
+
+  const reader = await getReader();
+  if (!reader) {
+    return null;
+  }
+
+  try {
+    const record = reader.get(normalized);
+    if (!record || !record.location) {
+      return null;
+    }
+
+    const { latitude, longitude } = record.location;
+    if (
+      typeof latitude === 'number' &&
+      typeof longitude === 'number' &&
+      Number.isFinite(latitude) &&
+      Number.isFinite(longitude)
+    ) {
+      return { latitude, longitude };
+    }
+
+    return null;
+  } catch (err) {
+    // Fail-safe: never crash on unexpected lookup error
+    return null;
+  }
+}
+
 module.exports = {
   initReader,
   getReader,
   setReader,
   closeReader,
   resolveGeoLocation,
+  resolveCoordinates,
   getDefaultDbPath
 };
