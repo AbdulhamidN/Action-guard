@@ -41,9 +41,10 @@ The API key identifies the calling application. It is distinct from the end user
 | POST   | `/api/v1/events`          | Submit a security event for logging and evaluation                           |
 | POST   | `/api/v1/risk/evaluate`   | Request a risk score for a given user/session without submitting a new event |
 | POST   | `/api/v1/policy/evaluate` | Evaluate a proposed action against policy and receive a decision             |
-| GET    | `/api/v1/sessions/:id`    | Retrieve current risk state and metadata for a session                       |
-| GET    | `/api/v1/events`          | Query historical events by user, session, or time range                      |
-| POST   | `/api/v1/webhooks`        | Register a webhook URL to receive decision/event notifications               |
+| GET    | `/api/v1/sessions/:id`      | Retrieve current risk state and metadata for a session                       |
+| GET    | `/api/v1/events`            | Query historical events by user, session, or time range                      |
+| GET    | `/api/v1/sequences/current` | Retrieve current active sequence/timeline for the authenticated user         |
+| POST   | `/api/v1/webhooks`          | Register a webhook URL to receive decision/event notifications               |
 
 In practice, `POST /events` is the primary integration point. Submitting an event triggers signal collection, risk scoring, and policy evaluation in one call and returns a decision.
 
@@ -206,6 +207,52 @@ Example response:
   "offset": 0
 }
 ```
+
+### GET `/api/v1/sequences/current`
+
+Retrieves the current active sequence and ordered event timeline for the authenticated user.
+
+* **Authentication:** User JWT Bearer token (`Authorization: Bearer <token>`). The user identity is determined from the verified token and cannot be overridden by request parameters.
+* **Storage Path:** Fast read from Redis active sequence cache (`sequence:user:<userId>`) with transparent fallback to MySQL on cache miss or eviction.
+
+Example response (active sequence present):
+
+```json
+{
+  "sequence": {
+    "id": "seq_5f9a2c",
+    "started_at": "2026-10-07T12:00:00.000Z",
+    "last_event_at": "2026-10-07T12:05:00.000Z",
+    "event_count": 2,
+    "events": [
+      {
+        "event_id": "evt_001",
+        "event_type": "login_success",
+        "timestamp": "2026-10-07T12:00:00.000Z"
+      },
+      {
+        "event_id": "evt_002",
+        "event_type": "recovery_email_change",
+        "timestamp": "2026-10-07T12:05:00.000Z"
+      }
+    ]
+  }
+}
+```
+
+Example response (no active sequence):
+
+```json
+{
+  "sequence": null
+}
+```
+
+Field notes:
+* `events` is strictly ordered by chronological `step_order` ascending.
+* Individual events expose strictly `event_id`, `event_type`, and `timestamp` to preserve user privacy (no IP, GPS coordinates, device fingerprints, or raw context/signal blobs).
+* Returns HTTP `200` with `{ "sequence": null }` when no active sequence exists within the correlation window.
+* Returns HTTP `401` with standard error format for missing, expired, or invalid authorization tokens.
 
 ## 6. Error Format
 

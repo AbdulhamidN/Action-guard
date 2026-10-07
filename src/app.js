@@ -3,6 +3,7 @@ const helmet = require('helmet');
 const authRouter = require('./routes/auth');
 const meRouter = require('./routes/me');
 const eventsRouter = require('./routes/events');
+const sequencesRouter = require('./routes/sequences');
 
 const app = express();
 
@@ -24,5 +25,8 @@ app.use('/api/v1/me', meRouter);
 
 // Security events query route (PEP route layer)
 app.use('/api/v1/events', eventsRouter);
+
+// Action sequences query route
+app.use('/api/v1/sequences', sequencesRouter);
 
 module.exports = app;
