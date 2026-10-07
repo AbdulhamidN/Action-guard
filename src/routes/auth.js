@@ -18,6 +18,7 @@ const { normalizeIp } = require('../utils/ip');
 const geoService = require('../services/geoService');
 const { collectTravelAnomalySignal } = require('../collectors/travelCollector');
 const { collectBotSignal } = require('../collectors/botCollector');
+const { collectBaselineDeviationSignal } = require('../collectors/baselineCollector');
 
 const router = express.Router();
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || `${DEFAULT_SESSION_TTL_SECONDS}s`;
@@ -182,12 +183,27 @@ router.post('/login', async (req, res) => {
       console.warn('[Auth] Impossible travel check failed:', travelErr.message);
     }
 
+    let behavioralDeviation = null;
+    try {
+      behavioralDeviation = await collectBaselineDeviationSignal(
+        user.id,
+        loginContext,
+        currentTimestamp
+      );
+    } catch (baselineErr) {
+      // Safe fallback: never disrupt authentication on baseline calculation failure
+      console.warn('[Auth] Baseline deviation check failed:', baselineErr.message);
+    }
+
     const loginMetadata = {};
     if (travelAnomaly) {
       loginMetadata.travel_anomaly = travelAnomaly;
     }
     if (botSignal) {
       loginMetadata.bot_detection = botSignal;
+    }
+    if (behavioralDeviation) {
+      loginMetadata.behavioral_deviation = behavioralDeviation;
     }
 
     // Record login_success
