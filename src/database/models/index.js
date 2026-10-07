@@ -4,12 +4,16 @@ const initSessionModel = require('./Session');
 const initDeviceModel = require('./Device');
 const initSecurityEventModel = require('./SecurityEvent');
 const initBehavioralBaselineModel = require('./BehavioralBaseline');
+const initActionSequenceModel = require('./ActionSequence');
+const initSequenceEventModel = require('./SequenceEvent');
 
 const User = initUserModel(sequelize);
 const Session = initSessionModel(sequelize);
 const Device = initDeviceModel(sequelize);
 const SecurityEvent = initSecurityEventModel(sequelize);
 const BehavioralBaseline = initBehavioralBaselineModel(sequelize);
+const ActionSequence = initActionSequenceModel(sequelize);
+const SequenceEvent = initSequenceEventModel(sequelize);
 
 // Associations
 User.hasMany(Session, {
@@ -63,11 +67,67 @@ BehavioralBaseline.belongsTo(User, {
   as: 'user'
 });
 
+// Module 5.1: ActionSequence & SequenceEvent Associations
+User.hasMany(ActionSequence, {
+  foreignKey: 'user_id',
+  as: 'actionSequences',
+  onDelete: 'CASCADE'
+});
+ActionSequence.belongsTo(User, {
+  foreignKey: 'user_id',
+  as: 'user'
+});
+
+Session.hasMany(ActionSequence, {
+  foreignKey: 'session_id',
+  as: 'actionSequences',
+  onDelete: 'SET NULL'
+});
+ActionSequence.belongsTo(Session, {
+  foreignKey: 'session_id',
+  as: 'session'
+});
+
+ActionSequence.belongsToMany(SecurityEvent, {
+  through: SequenceEvent,
+  foreignKey: 'sequence_id',
+  otherKey: 'event_id',
+  as: 'events'
+});
+SecurityEvent.belongsToMany(ActionSequence, {
+  through: SequenceEvent,
+  foreignKey: 'event_id',
+  otherKey: 'sequence_id',
+  as: 'sequences'
+});
+
+ActionSequence.hasMany(SequenceEvent, {
+  foreignKey: 'sequence_id',
+  as: 'sequenceEvents',
+  onDelete: 'CASCADE'
+});
+SequenceEvent.belongsTo(ActionSequence, {
+  foreignKey: 'sequence_id',
+  as: 'sequence'
+});
+
+SecurityEvent.hasMany(SequenceEvent, {
+  foreignKey: 'event_id',
+  as: 'sequenceEvents',
+  onDelete: 'CASCADE'
+});
+SequenceEvent.belongsTo(SecurityEvent, {
+  foreignKey: 'event_id',
+  as: 'securityEvent'
+});
+
 module.exports = {
   sequelize,
   User,
   Session,
   Device,
   SecurityEvent,
-  BehavioralBaseline
+  BehavioralBaseline,
+  ActionSequence,
+  SequenceEvent
 };

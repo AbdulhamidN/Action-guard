@@ -74,7 +74,7 @@ Attach device fingerprint (FingerprintJS), IP/geo data (MaxMind GeoLite2), and i
 
 ### Event Logging & Correlation Engine
 
-Writes every sensitive action as a structured record to MySQL, following a defined event schema. Groups related events into time-windowed sequences (e.g., login → recovery email change → password change) so that a chain of actions can be evaluated together, not just individually. Active sequences are cached in Redis for fast reads; full history is persisted in MySQL.
+Writes every sensitive action as a structured record to MySQL, following a defined event schema. Groups related events into time-windowed sequences (e.g., login → recovery email change → password change) so that a chain of actions can be evaluated together, not just individually. Active sequences are cached in Redis under the `sequence:user:<userId>` key pattern for fast reads, featuring write-through synchronization upon grouping, automatic TTL expiration matching the correlation window, and transparent fallback to MySQL (which remains the durable, authoritative source of truth) on cache miss. MySQL persists the full sequence history.
 
 ### Personal Behavioral Baseline
 
@@ -187,7 +187,7 @@ Users
   └── Security Events
           │
           ▼
-    Action Sequences (correlated groups of events)
+    Action Sequences (correlated groups of events; active sequences cached in Redis via sequence:user:<userId>, full history persisted in MySQL)
           │
           ▼
     Risk Scores (computed per event/session)
@@ -201,6 +201,8 @@ Users
     Policy Files (versioned YAML/JSON, stored alongside
     the codebase, not in the database)
 ```
+
+MySQL remains the durable, authoritative source of truth for all persistent state. Redis provides fast-read caching for active sessions and active user action sequences (`sequence:user:<userId>`). Write-through synchronization updates Redis whenever an event is grouped into a sequence, with a TTL matching the correlation time window. On cache miss or TTL expiration, the system falls back to MySQL and repopulates the Redis cache if the sequence remains within the active correlation window. When a session is deleted, any cached active sequence referencing it is automatically updated to `session_id: null` in Redis to match MySQL's `ON DELETE SET NULL` behavior.
 
 Flexible, variable-shaped signal payloads (e.g., differing metadata per signal type) are stored as JSON columns within MySQL rather than introducing a separate database, keeping the system on a single storage technology.
 

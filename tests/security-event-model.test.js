@@ -263,6 +263,7 @@ describe('Sub-module 2.1 — Security Event Schema', () => {
   test('migration rollback (down) drops table and up re-creates it', async () => {
     const queryInterface = sequelize.getQueryInterface();
 
+    await sequelize.query('SET FOREIGN_KEY_CHECKS = 0');
     // Verify down drops the table
     await migration002.down(queryInterface);
     let tables = await queryInterface.showAllTables();
@@ -270,6 +271,7 @@ describe('Sub-module 2.1 — Security Event Schema', () => {
 
     // Verify up re-creates table and indexes
     await migration002.up(queryInterface);
+    await sequelize.query('SET FOREIGN_KEY_CHECKS = 1');
     tables = await queryInterface.showAllTables();
     expect(tables).toContain('security_events');
 
