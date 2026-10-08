@@ -338,8 +338,8 @@ describe('Module 5.3 — Sequence Query/Timeline API (GET /api/v1/sequences/curr
 
   describe('5. Cache-Miss Fallback Through API', () => {
     test('transparently falls back to MySQL and returns active sequence when Redis cache is evicted', async () => {
-      const t1 = new Date('2026-10-07T13:00:00.000Z');
-      const t2 = new Date('2026-10-07T13:02:00.000Z');
+      const t1 = new Date(Date.now() - 4 * 60 * 1000);
+      const t2 = new Date(Date.now() - 2 * 60 * 1000);
 
       const event1 = await SecurityEvent.create({
         user_id: userA.id,
