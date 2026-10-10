@@ -67,11 +67,28 @@ async function recordSecurityEvent(eventData = {}) {
     }
 
     // Hook (c): Evaluate and persist risk assessment
+    let assessmentRecord = null;
     try {
       const { evaluateAndStoreRiskForEvent } = require('./riskEngineService');
-      await evaluateAndStoreRiskForEvent(event);
+      assessmentRecord = await evaluateAndStoreRiskForEvent(event);
     } catch (err) {
       console.warn('[EventPipeline] Risk evaluation failed:', err.message);
+    }
+
+    // Module 7.2: Single emit point after correlation, scoring, and persistence
+    try {
+      const eventBus = require('../events/eventBus');
+      const plainEvent = typeof event.get === 'function' ? event.get({ plain: true }) : { ...event };
+      const plainAssessment = assessmentRecord
+        ? (typeof assessmentRecord.get === 'function' ? assessmentRecord.get({ plain: true }) : { ...assessmentRecord })
+        : null;
+
+      eventBus.safeEmit('pipeline:event_processed', {
+        event: plainEvent,
+        assessment: plainAssessment
+      });
+    } catch (err) {
+      console.warn('[EventPipeline] Event bus emit failed:', err.message);
     }
   }
 

@@ -38,7 +38,41 @@ class ActionGuardEventBus {
 
     safeListener.__originalListener = listener;
     this._emitter.on(eventName, safeListener);
+
+    return () => {
+      this.off(eventName, listener);
+    };
+  }
+
+  /**
+   * Removes a specific listener previously registered on eventName.
+   *
+   * @param {string} eventName
+   * @param {Function} listener
+   * @returns {ActionGuardEventBus}
+   */
+  off(eventName, listener) {
+    if (typeof listener !== 'function') {
+      return this;
+    }
+    const currentListeners = this._emitter.listeners(eventName);
+    for (const l of currentListeners) {
+      if (l.__originalListener === listener || l === listener) {
+        this._emitter.removeListener(eventName, l);
+      }
+    }
     return this;
+  }
+
+  /**
+   * Alias for off().
+   *
+   * @param {string} eventName
+   * @param {Function} listener
+   * @returns {ActionGuardEventBus}
+   */
+  removeListener(eventName, listener) {
+    return this.off(eventName, listener);
   }
 
   /**

@@ -1,0 +1,289 @@
+[
+  {
+    "scenario_id": "scen_benign_routine_login_001",
+    "name": "Benign Routine User Login",
+    "scenario_type": "benign",
+    "is_synthetic": true,
+    "description": "Legitimate user logs in from an existing recognized device and home country.",
+    "expected_outcome": {
+      "target_decision": "allow",
+      "max_acceptable_decision": "monitor"
+    },
+    "events": [
+      {
+        "event_id": "evt_routine_seed_01",
+        "event_type": "login_success",
+        "timestamp_offset_ms": 0,
+        "context": {
+          "device_fingerprint": "fp_user_laptop",
+          "geo_country": "US",
+          "ip_address": "198.51.100.1"
+        },
+        "metadata": {
+          "action_sensitivity": "low"
+        }
+      },
+      {
+        "event_id": "evt_routine_login_02",
+        "event_type": "login_success",
+        "timestamp_offset_ms": 3600000,
+        "context": {
+          "device_fingerprint": "fp_user_laptop",
+          "geo_country": "US",
+          "ip_address": "198.51.100.1"
+        },
+        "metadata": {
+          "action_sensitivity": "low"
+        }
+      }
+    ]
+  },
+  {
+    "scenario_id": "scen_benign_phone_change_002",
+    "name": "Benign Account Profile Update",
+    "scenario_type": "benign",
+    "is_synthetic": true,
+    "description": "Legitimate user logs in and updates their phone number from their usual device.",
+    "expected_outcome": {
+      "target_decision": "allow",
+      "max_acceptable_decision": "monitor"
+    },
+    "events": [
+      {
+        "event_id": "evt_phone_seed_01",
+        "event_type": "login_success",
+        "timestamp_offset_ms": 0,
+        "context": {
+          "device_fingerprint": "fp_user_desktop",
+          "geo_country": "US",
+          "ip_address": "198.51.100.2"
+        },
+        "metadata": {
+          "action_sensitivity": "low"
+        }
+      },
+      {
+        "event_id": "evt_phone_update_02",
+        "event_type": "phone_number_change",
+        "timestamp_offset_ms": 180000,
+        "context": {
+          "device_fingerprint": "fp_user_desktop",
+          "geo_country": "US",
+          "ip_address": "198.51.100.2"
+        },
+        "metadata": {
+          "action_sensitivity": "medium"
+        }
+      }
+    ]
+  },
+  {
+    "scenario_id": "scen_benign_new_device_003",
+    "name": "Benign New Device Login",
+    "scenario_type": "benign",
+    "is_synthetic": true,
+    "description": "Legitimate user logs in from a new tablet within their home country without travel anomaly.",
+    "expected_outcome": {
+      "target_decision": "allow",
+      "max_acceptable_decision": "monitor"
+    },
+    "events": [
+      {
+        "event_id": "evt_newdev_seed_01",
+        "event_type": "login_success",
+        "timestamp_offset_ms": 0,
+        "context": {
+          "device_fingerprint": "fp_user_primary",
+          "geo_country": "US",
+          "ip_address": "198.51.100.5"
+        },
+        "metadata": {
+          "action_sensitivity": "low"
+        }
+      },
+      {
+        "event_id": "evt_newdev_login_02",
+        "event_type": "login_success",
+        "timestamp_offset_ms": 7200000,
+        "context": {
+          "device_fingerprint": "fp_user_tablet_new",
+          "geo_country": "US",
+          "ip_address": "198.51.100.6"
+        },
+        "metadata": {
+          "action_sensitivity": "low"
+        }
+      }
+    ]
+  },
+  {
+    "scenario_id": "scen_harmful_impossible_travel_004",
+    "name": "Harmful Impossible Travel Access",
+    "scenario_type": "harmful",
+    "is_synthetic": true,
+    "description": "Attacker accesses session from a distant country within impossible timeframe.",
+    "expected_outcome": {
+      "target_decision": "monitor",
+      "min_protective_decision": "monitor"
+    },
+    "events": [
+      {
+        "event_id": "evt_travel_seed_01",
+        "event_type": "login_success",
+        "timestamp_offset_ms": 0,
+        "context": {
+          "device_fingerprint": "fp_legit_us",
+          "geo_country": "US",
+          "ip_address": "198.51.100.1"
+        },
+        "metadata": {
+          "action_sensitivity": "low"
+        }
+      },
+      {
+        "event_id": "evt_travel_exploit_02",
+        "event_type": "login_success",
+        "timestamp_offset_ms": 1800000,
+        "context": {
+          "device_fingerprint": "fp_attacker_foreign",
+          "geo_country": "RU",
+          "ip_address": "203.0.113.88"
+        },
+        "metadata": {
+          "action_sensitivity": "low",
+          "travel_anomaly": {
+            "impossible_travel": true
+          }
+        }
+      }
+    ]
+  },
+  {
+    "scenario_id": "scen_harmful_credential_cascade_005",
+    "name": "Harmful Rapid Credential Cascade Attack",
+    "scenario_type": "harmful",
+    "is_synthetic": true,
+    "description": "Attacker logs in via impossible travel and rapidly attempts recovery email change.",
+    "expected_outcome": {
+      "target_decision": "delay",
+      "min_protective_decision": "reverify"
+    },
+    "events": [
+      {
+        "event_id": "evt_cascade_seed_01",
+        "event_type": "login_success",
+        "timestamp_offset_ms": 0,
+        "context": {
+          "device_fingerprint": "fp_legit_office",
+          "geo_country": "US",
+          "ip_address": "198.51.100.1"
+        },
+        "metadata": {
+          "action_sensitivity": "low"
+        }
+      },
+      {
+        "event_id": "evt_cascade_login_02",
+        "event_type": "login_success",
+        "timestamp_offset_ms": 3600000,
+        "context": {
+          "device_fingerprint": "fp_attacker_laptop",
+          "geo_country": "RU",
+          "ip_address": "203.0.113.99"
+        },
+        "metadata": {
+          "action_sensitivity": "low",
+          "travel_anomaly": {
+            "impossible_travel": true
+          }
+        }
+      },
+      {
+        "event_id": "evt_cascade_email_03",
+        "event_type": "recovery_email_change",
+        "timestamp_offset_ms": 3720000,
+        "context": {
+          "device_fingerprint": "fp_attacker_laptop",
+          "geo_country": "RU",
+          "ip_address": "203.0.113.99"
+        },
+        "metadata": {
+          "action_sensitivity": "high"
+        }
+      }
+    ]
+  },
+  {
+    "scenario_id": "scen_harmful_takeover_progression_006",
+    "name": "Harmful Account Takeover Complete Progression",
+    "scenario_type": "harmful",
+    "is_synthetic": true,
+    "description": "Attacker takes over account, cascades credentials, and attempts critical password change.",
+    "expected_outcome": {
+      "target_decision": "block",
+      "min_protective_decision": "delay"
+    },
+    "events": [
+      {
+        "event_id": "evt_takeover_seed_01",
+        "event_type": "login_success",
+        "timestamp_offset_ms": 0,
+        "context": {
+          "device_fingerprint": "fp_legit_us",
+          "geo_country": "US",
+          "ip_address": "198.51.100.1"
+        },
+        "metadata": {
+          "action_sensitivity": "low"
+        }
+      },
+      {
+        "event_id": "evt_takeover_login_02",
+        "event_type": "login_success",
+        "timestamp_offset_ms": 3600000,
+        "context": {
+          "device_fingerprint": "fp_attacker_device",
+          "geo_country": "RU",
+          "ip_address": "203.0.113.50"
+        },
+        "metadata": {
+          "action_sensitivity": "low",
+          "travel_anomaly": {
+            "impossible_travel": true
+          }
+        }
+      },
+      {
+        "event_id": "evt_takeover_email_03",
+        "event_type": "recovery_email_change",
+        "timestamp_offset_ms": 3720000,
+        "context": {
+          "device_fingerprint": "fp_attacker_device",
+          "geo_country": "RU",
+          "ip_address": "203.0.113.50"
+        },
+        "metadata": {
+          "action_sensitivity": "high"
+        }
+      },
+      {
+        "event_id": "evt_takeover_pass_04",
+        "event_type": "password_change",
+        "timestamp_offset_ms": 3840000,
+        "context": {
+          "device_fingerprint": "fp_attacker_device",
+          "geo_country": "RU",
+          "ip_address": "203.0.113.50"
+        },
+        "metadata": {
+          "action_sensitivity": "critical",
+          "behavioral_deviation": {
+            "is_evaluated": true,
+            "has_sufficient_history": true,
+            "deviation_score": 0.90
+          }
+        }
+      }
+    ]
+  }
+]

@@ -37,22 +37,23 @@ The API key identifies the calling application. It is distinct from the end user
 ## 3. Endpoints
 
 | Method | Path                      | Purpose                                                                      |
+| Method | Path                      | Purpose                                                                      |
 | ------ | ------------------------- | ---------------------------------------------------------------------------- |
-| POST   | `/api/v1/events`          | Submit a security event for logging and evaluation                           |
+| POST   | `/api/v1/events`          | *(Planned - Module 11)* Submit a security event for logging and evaluation   |
 | POST   | `/api/v1/risk/evaluate`   | Request a risk score for a given user/session without submitting a new event |
-| POST   | `/api/v1/policy/evaluate` | Evaluate a proposed action against policy and receive a decision             |
+| POST   | `/api/v1/policy/evaluate` | Evaluate a proposed action against policy and receive an advisory decision   |
 | GET    | `/api/v1/sessions/:id`      | Retrieve current risk state and metadata for a session                       |
 | GET    | `/api/v1/events`            | Query historical events by user, session, or time range                      |
 | GET    | `/api/v1/sequences/current` | Retrieve current active sequence/timeline for the authenticated user         |
-| POST   | `/api/v1/webhooks`          | Register a webhook URL to receive decision/event notifications               |
+| POST   | `/api/v1/webhooks`          | *(Planned - Module 11)* Register a webhook URL for decision/event alerts     |
 
-In practice, `POST /events` is the primary integration point. Submitting an event triggers signal collection, risk scoring, and policy evaluation in one call and returns a decision.
+In practice, `POST /events` is planned as a primary external integration point (Module 11). When implemented, submitting an event will trigger signal collection, risk scoring, and policy evaluation in one call and return a decision.
 
 `/risk/evaluate` and `/policy/evaluate` provide narrower operations for applications that want to check current risk or evaluate a hypothetical action without generating a new logged event.
 
 ## 4. Request Structure
 
-### POST `/api/v1/events`
+### POST `/api/v1/events` *(Planned - Module 11)*
 
 ```json
 {
@@ -161,18 +162,44 @@ Unavailable response (`503 Service Unavailable`):
 {
   "user_id": "usr_12345",
   "session_id": "sess_98765",
-  "action_type": "high_impact_action",
-  "action_sensitivity": "critical"
+  "event_type": "high_impact_action",
+  "context": {
+    "ip_address": "198.51.100.1",
+    "device_fingerprint": "fp_sample_device_hash"
+  },
+  "metadata": {
+    "action_sensitivity": "critical"
+  }
 }
 ```
 
-This endpoint checks what response an action would receive without logging it as a real event. It can be used as a "simulate before execute" check by the integrating application.
+This endpoint checks what response an action would receive without logging it as a real event. It evaluates policy through the pure attribute-rule engine (Module 8) in an **advisory-only** mode.
+
+> [!WARNING]
+> **Advisory only:** Results from `/api/v1/policy/evaluate` are never persisted, mutate no sequences or risk tables, and affect no Redis caches. Module 10 enforcement middleware must **never** trust this advisory output for actual authorization or audit decisions.
+
+**Response Structure (Allowlist for JWT Callers):**
+
+```json
+{
+  "decision": "block",
+  "enforcement_mode": "automatic",
+  "explanation": {
+    "user_facing": "This action has been restricted for security reasons."
+  },
+  "evaluated_at": "2026-10-10T10:00:00.000Z"
+}
+```
+
+*Note on Privacy & Fail-Safe:* For JWT callers, technical risk scores, contributing signals, rule IDs, and administrative explanations are withheld to preserve privacy and prevent oracle probing. When risk evaluation is temporarily unavailable, the endpoint returns HTTP 200 with the fail-safe decision for the action's sensitivity tier.
+
+*Note on Policy-as-Code (Module 9):* The underlying Policy Decision Point loads response tables and escalation rules from versioned policy files (`policies/default-v1.json`). The HTTP API request/response schema for `/api/v1/policy/evaluate` remains 100% backward compatible and unchanged. Offline replay evaluation and candidate diffing operate out-of-band via internal test harnesses without HTTP API mutations.
 
 ## 5. Response Structure
 
-### Decision Response
+### Decision Response (Planned External Integration / Events)
 
-Returned by `/events` and `/policy/evaluate`.
+Returned by `POST /events` (Planned - Module 11).
 
 ```json
 {
@@ -430,9 +457,9 @@ Every event submitted to or logged internally by ActionGuard conforms to this st
 }
 ```
 
-## 9. Webhooks
+## 9. Webhooks *(Planned - Module 11)*
 
-### POST `/api/v1/webhooks`
+### POST `/api/v1/webhooks` *(Planned - Module 11)*
 
 Registers a URL to receive asynchronous notifications when a decision is made.
 
@@ -472,11 +499,166 @@ Signed webhook payloads, allowing the receiving application to verify that a req
 * A future `v2` should maintain `v1` in parallel for a defined deprecation period.
 * A formal deprecation policy will be defined before introducing `v2`.
 
+## 11. Real-Time Stream (Socket.IO)
+
+ActionGuard provides a real-time event streaming interface powered by Socket.IO mounted alongside the HTTP application. Connected frontends and dashboards receive live notifications of newly recorded security events and updated risk assessments without polling.
+
+### 11.1 Connection & CORS Configuration
+
+* **Transport & Port:** WebSocket connection mounted on the primary server `PORT` (default: `3000`).
+* **CORS Origin:** Controlled by `CORS_ALLOWED_ORIGINS` (comma-delimited list, e.g., `http://localhost:3000,http://localhost:5173`). Wildcard origins (`*`) are strictly prohibited and throw an error at server initialization.
+* **Push-Only Protocol:** Sockets are push-only from ActionGuard to connected clients. Inbound client-emitted messages and requests are ignored.
+
+### 11.2 Handshake Authentication
+
+Authentication occurs exclusively during the connection handshake via the `auth` payload object. Credentials passed in URL query parameters (e.g. `?token=...` or `?apiKey=...`) are strictly rejected.
+
+```javascript
+// User client connection
+const socket = io('http://localhost:3000', {
+  auth: { token: '<jwt_token>' }
+});
+
+// Admin dashboard connection
+const adminSocket = io('http://localhost:3000', {
+  auth: { apiKey: '<admin_api_key>' }
+});
+```
+
+* **User Authentication (`auth.token`):** Validated against JWT secret and the active session stored in Redis. The JWT must carry a valid `session_id`.
+* **Admin Authentication (`auth.apiKey`):** Validated in constant time against `ACTIONGUARD_ADMIN_API_KEY`. The configured key must be at least 32 characters in length. If an apiKey is provided, no token fallback is permitted.
+* **Dual Credentials:** If both `apiKey` and `token` are supplied in the same handshake, the connection is rejected.
+
+#### Handshake Rejection Error Codes
+
+Failed handshakes emit an error event with one of the following exact string codes:
+
+* `unauthorized`: Missing credentials, invalid token signature, malformed token, wrong admin API key, admin key shorter than 32 characters, credentials provided in query parameters, or both apiKey and token supplied.
+* `token_expired`: JWT token has expired based on its `exp` claim.
+* `invalid_session`: Token is valid, but the associated session has been revoked, is missing from Redis, or the token lacks a `session_id`.
+
+### 11.3 Rooms & Isolation Boundaries
+
+Rooms are strictly server-managed. Clients cannot join or leave rooms; any client-emitted `join` or `subscribe` events are ignored:
+
+* **User Sockets:** Automatically placed in `user:<userId>` (for account-wide events) and `session:<sessionId>` (for session-specific revocation).
+* **Admin Sockets:** Automatically placed in `admin:stream` (for global telemetry).
+
+### 11.4 Event Delivery & Ordering Invariant
+
+When an event is processed by ActionGuard, notifications are broadcast to relevant rooms in a strict two-stage sequence:
+
+1. `event:recorded` is emitted **first**.
+2. `risk:updated` is emitted **second** (only if the event was scored and an assessment was produced; unscored or failed events emit only `event:recorded`).
+
+### 11.5 Broadcast Payloads
+
+#### User `event:recorded` Payload
+Broadcast to `user:<userId>`:
+
+```json
+{
+  "event_id": "evt_12345",
+  "session_id": "sess_98765",
+  "event_type": "login_success",
+  "timestamp": "2026-10-10T09:00:00.000Z",
+  "coarse_location": {
+    "country": "US",
+    "region": "CA"
+  },
+  "is_new_device": true,
+  "is_new_country": true
+}
+```
+* `user_id` is omitted.
+* `is_new_device` and `is_new_country` are included with value `true` when novelty is detected; if recognized, the key is omitted entirely (never `false`).
+* `coarse_location` is `{ country, region }` if geo information is present in the context, or `null` if absent.
+* Sensitive context fields (`ip_address`, `device_fingerprint`, coordinates, `password_hash`) are strictly excluded.
+
+#### Admin `event:recorded` Payload
+Broadcast to `admin:stream`:
+
+```json
+{
+  "event_id": "evt_12345",
+  "user_id": "usr_12345",
+  "session_id": "sess_98765",
+  "event_type": "login_success",
+  "timestamp": "2026-10-10T09:00:00.000Z",
+  "coarse_location": {
+    "country": "US",
+    "region": "CA"
+  },
+  "is_new_device": true,
+  "is_new_country": true
+}
+```
+
+#### User `risk:updated` Payload
+Broadcast to `user:<userId>` (tier-only format):
+
+```json
+{
+  "event_id": "evt_12345",
+  "session_id": "sess_98765",
+  "risk_tier": "low | medium | high | critical",
+  "evaluated_at": "2026-10-10T09:00:00.000Z",
+  "explanation": {
+    "user_facing": "Activity appears consistent with normal usage patterns."
+  }
+}
+```
+* Contains no numeric score (`risk_score`), no signal breakdown or weights (`contributing_signals`), no `user_id`, and no `admin_facing` explanation.
+
+#### Admin `risk:updated` Payload
+Broadcast to `admin:stream`:
+
+```json
+{
+  "event_id": "evt_12345",
+  "user_id": "usr_12345",
+  "session_id": "sess_98765",
+  "risk_score": 84,
+  "risk_tier": "critical",
+  "contributing_signals": [
+    {
+      "signal": "base_action_password_change",
+      "category": "action",
+      "weight": 20
+    },
+    {
+      "signal": "seq_rapid_credential_cascade",
+      "category": "sequence",
+      "weight": 20
+    }
+  ],
+  "evaluated_at": "2026-10-10T09:00:00.000Z",
+  "explanation": {
+    "user_facing": "Elevated risk pattern observed across multiple security indicators.",
+    "admin_facing": "Action sequence triggered rapid credential cascade."
+  }
+}
+```
+
+### 11.6 Disconnection & Revocation Semantics
+
+* **Session Invalidation (`session:terminated`):** When a session is invalidated via `sessionService.invalidateSession` (e.g. on logout or administrative revocation), a `session:terminated` event is emitted to `session:<sessionId>` immediately:
+  ```json
+  {
+    "session_id": "sess_98765",
+    "reason": "session_invalidated",
+    "terminated_at": "2026-10-10T09:00:00.000Z"
+  }
+  ```
+  The client socket receives `session:terminated` **before** the transport disconnect event fires.
+* **Token Expiration Disconnection:** User sockets establish an unreferenced one-shot timer upon connection matching the JWT's `exp` claim. Sockets automatically disconnect when the token expires.
+* **Periodic Revalidation:** A background interval revalidates all connected user sockets against active Redis sessions every `SOCKET_SESSION_REVALIDATION_INTERVAL_SECONDS` (default: 30 seconds). Sockets whose Redis session has expired or been revoked are forcefully disconnected.
+
 ## Summary
 
-An integrating application communicates with ActionGuard primarily through `POST /api/v1/events`.
+An integrating application will communicate with ActionGuard primarily through `POST /api/v1/events` *(Planned - Module 11)*. Today, advisory policy checks are available via `POST /api/v1/policy/evaluate`.
 
-The application sends a structured security event with relevant context and receives:
+When implemented, the application will send a structured security event with relevant context and receive:
 
 * a security decision,
 * a risk score,
@@ -485,6 +667,7 @@ The application sends a structured security event with relevant context and rece
 * an administrator-facing explanation, and
 * any required cooling-off information.
 
-Session state and historical events can be queried separately, while webhooks allow decisions to be pushed to the integrating application instead of being repeatedly requested.
+Session state and historical events can be queried separately, while webhooks *(Planned - Module 11)* and Socket.IO real-time streams allow decisions and telemetry to be pushed live to the integrating application and dashboard instead of being repeatedly polled.
 
 The MVP uses a static API key per integrating application. More advanced authentication, signed webhook payloads, and additional versioning controls can be added later.
+

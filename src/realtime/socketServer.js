@@ -3,10 +3,16 @@ const { Server } = require('socket.io');
 const eventBus = require('../events/eventBus');
 const { verifyUserAndSessionToken } = require('../middleware/auth');
 const sessionService = require('../services/sessionService');
+const {
+  buildUserRiskPayload,
+  buildAdminRiskPayload,
+  buildEventRecordedPayload
+} = require('./payloads');
 
 let ioInstance = null;
 let revalidationInterval = null;
-let sessionTerminatedListenerRef = null;
+let unsubSessionTerminated = null;
+let unsubPipelineProcessed = null;
 
 /**
  * Initializes the Socket.IO server mounted on an HTTP server.
@@ -177,30 +183,80 @@ function initSocketServer(httpServer, options = {}) {
     revalidationInterval.unref();
   }
 
-  // Clean up any previously attached listener on eventBus
-  if (sessionTerminatedListenerRef && eventBus._emitter) {
-    const listeners = eventBus._emitter.listeners('session:terminated');
-    for (const l of listeners) {
-      if (l.__originalListener === sessionTerminatedListenerRef || l === sessionTerminatedListenerRef) {
-        eventBus._emitter.removeListener('session:terminated', l);
-      }
-    }
-    sessionTerminatedListenerRef = null;
+  // Clean up any previously attached listeners on eventBus
+  if (typeof unsubSessionTerminated === 'function') {
+    unsubSessionTerminated();
+    unsubSessionTerminated = null;
+  }
+  if (typeof unsubPipelineProcessed === 'function') {
+    unsubPipelineProcessed();
+    unsubPipelineProcessed = null;
   }
 
-  // Subscribe to session:terminated event for immediate room disconnection
-  sessionTerminatedListenerRef = (payload) => {
-    if (!ioInstance || !payload || !payload.session_id) return;
-    const room = `session:${payload.session_id}`;
-    ioInstance.to(room).emit('session:terminated', {
-      session_id: payload.session_id,
-      reason: payload.reason || 'session_invalidated',
-      terminated_at: payload.terminated_at || new Date().toISOString()
-    });
-    ioInstance.in(room).disconnectSockets(true);
+  // 1. Subscribe to session:terminated event for immediate room disconnection
+  const onSessionTerminated = (payload) => {
+    try {
+      if (!ioInstance || !payload || !payload.session_id) return;
+      const room = `session:${payload.session_id}`;
+      ioInstance.to(room).emit('session:terminated', {
+        session_id: payload.session_id,
+        reason: payload.reason || 'session_invalidated',
+        terminated_at: payload.terminated_at || new Date().toISOString()
+      });
+      ioInstance.in(room).disconnectSockets(true);
+    } catch (err) {
+      console.warn('[SocketServer] Error handling session:terminated:', err.message);
+    }
   };
+  unsubSessionTerminated = eventBus.on('session:terminated', onSessionTerminated);
 
-  eventBus.on('session:terminated', sessionTerminatedListenerRef);
+  // 2. Subscribe to pipeline:event_processed for live sanitized broadcasts
+  const onPipelineEventProcessed = (data) => {
+    try {
+      if (!ioInstance || !data || !data.event) return;
+      const { event, assessment } = data;
+      const userId = event.user_id || event.userId;
+      if (!userId) return;
+
+      const userRoom = `user:${userId}`;
+      const adminRoom = 'admin:stream';
+
+      // (a) Emit event:recorded first
+      try {
+        const userEventPayload = buildEventRecordedPayload(event, assessment, { includeUserId: false });
+        ioInstance.to(userRoom).emit('event:recorded', userEventPayload);
+      } catch (err) {
+        console.warn('[SocketServer] Error broadcasting user event:recorded:', err.message);
+      }
+
+      try {
+        const adminEventPayload = buildEventRecordedPayload(event, assessment, { includeUserId: true });
+        ioInstance.to(adminRoom).emit('event:recorded', adminEventPayload);
+      } catch (err) {
+        console.warn('[SocketServer] Error broadcasting admin event:recorded:', err.message);
+      }
+
+      // (b) Emit risk:updated second (only when assessment is non-null)
+      if (assessment) {
+        try {
+          const userRiskPayload = buildUserRiskPayload(event, assessment);
+          ioInstance.to(userRoom).emit('risk:updated', userRiskPayload);
+        } catch (err) {
+          console.warn('[SocketServer] Error broadcasting user risk:updated:', err.message);
+        }
+
+        try {
+          const adminRiskPayload = buildAdminRiskPayload(event, assessment);
+          ioInstance.to(adminRoom).emit('risk:updated', adminRiskPayload);
+        } catch (err) {
+          console.warn('[SocketServer] Error broadcasting admin risk:updated:', err.message);
+        }
+      }
+    } catch (err) {
+      console.warn('[SocketServer] Error handling pipeline:event_processed:', err.message);
+    }
+  };
+  unsubPipelineProcessed = eventBus.on('pipeline:event_processed', onPipelineEventProcessed);
 
   ioInstance = io;
   return io;
@@ -227,14 +283,14 @@ async function closeSocketServer() {
     revalidationInterval = null;
   }
 
-  if (sessionTerminatedListenerRef && eventBus._emitter) {
-    const listeners = eventBus._emitter.listeners('session:terminated');
-    for (const l of listeners) {
-      if (l.__originalListener === sessionTerminatedListenerRef || l === sessionTerminatedListenerRef) {
-        eventBus._emitter.removeListener('session:terminated', l);
-      }
-    }
-    sessionTerminatedListenerRef = null;
+  if (typeof unsubSessionTerminated === 'function') {
+    unsubSessionTerminated();
+    unsubSessionTerminated = null;
+  }
+
+  if (typeof unsubPipelineProcessed === 'function') {
+    unsubPipelineProcessed();
+    unsubPipelineProcessed = null;
   }
 
   if (!ioInstance) {

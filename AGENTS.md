@@ -157,3 +157,12 @@ Implementation details may evolve during development.
 Do not treat the current technology choices as permanent limitations on the project's security capabilities.
 
 When a better implementation is required, evaluate it against the project's requirements, security model, maintainability, and integration goals before adopting it.
+
+## Standard report and test rules (apply to every task)
+Every task report must include, without being asked:
+1. Files created and modified (from `git status`), and confirmation nothing outside the task's permitted list changed.
+2. Test counts: previous total, new tests, new total, with the arithmetic. Name each new test and map it to the requirement it covers. Do not merge required cases into fewer tests.
+3. The result of plain `npm test` run twice.
+4. Any requirement not met, and any deviation from the prompt, stated plainly.
+Test rules: build timestamps relative to the current time (no absolute dates compared to the clock); no fixed sleeps (poll with timeouts); ephemeral ports; clean teardown; never edit or delete an existing test to make it pass.
+Never commit. Never edit files outside the permitted list. If a design note and the code disagree, stop and report.

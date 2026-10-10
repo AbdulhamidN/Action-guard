@@ -1,0 +1,179 @@
+# ActionGuard — Requirements Traceability Matrix
+
+## 1. Overview & Traceability Methodology
+
+This document provides a comprehensive traceability matrix linking every functional requirement (FR) and non-functional requirement (NFR) from `docs/requirements.md` (the Requirements Analysis) to its delivering module in `docs/development-plan.md`, current implementation status, and verifying automated test evidence under `tests/`.
+
+### Status Definitions:
+- **Done**: Fully implemented and validated by at least one named automated test that directly proves the required behavior.
+- **Partial**: Partially implemented in the current codebase, or lacking dedicated test coverage, or delivered across multiple roadmap modules where later modules remain unstarted.
+- **Not started**: Planned in the development roadmap (Modules 8–13) but not yet implemented.
+- **No module owns it**: Not assigned to any delivery module in the development plan (Modules 1–13); flagged as future research or non-MVP architectural expansion.
+
+### Explicit Deferrals & Cross-Module Alignments:
+1. **Frontend Dashboard Real-Time Hook**: The Module 7 task bullet *"Connect the frontend to the real-time event stream"* and the acceptance check *"dashboard updates live without refresh"* are explicitly deferred to **Module 12 (Dashboard and Explainability)**, when the React frontend application is constructed.
+2. **REST vs. WebSocket Payload Alignment**: REST endpoints (`GET /api/v1/sessions/:id` and `POST /api/v1/risk/evaluate`) currently return the full technical risk breakdown (numeric score, all contributing signals, admin explanation) to standard JWT callers. WebSocket user rooms are tier-only and privacy-sanitized. Unifying the REST authorization boundary to tier-only for non-admin callers is explicitly scheduled for **Module 11 (Hardening and Integration)**.
+
+### Current Code Audit (Session Controls & Privilege):
+- **Idle Timeout (FR-23)**: `src/services/sessionService.js` (lines 7, 53) sets a fixed Redis TTL (`DEFAULT_SESSION_TTL_SECONDS = 900` s) upon session creation. Incoming requests in `src/middleware/auth.js` validate session existence via `validateActiveSession` (`GET session:<id>`) but **do not touch or reset the TTL**. Consequently, sessions terminate after 15 minutes of elapsed time rather than tracking inactivity; a sliding idle timeout does not yet exist. Marked **Partial**.
+- **Maximum Session Age (FR-25)**: `src/services/sessionService.js` (lines 20–30) writes a durable `expires_at` timestamp to MySQL and sets the Redis key TTL. However, because there is no sliding idle timeout, this hard TTL acts simultaneously as both the session lifetime and idle timeout. There is no independent maximum session age mechanism (e.g., 8-hour cap distinct from idle window). Marked **Partial**.
+- **Short-Lived Elevated Trust (FR-8, FR-9, FR-27)**: `src/services/sessionService.js` and `src/middleware/auth.js` store and issue only standard session tokens `{ user_id, email, session_id }`. No step-up verification claims, elevated trust scopes, or temporary privilege expiration mechanisms exist in the codebase today. These capabilities are owned by **Module 10 (Enforcement Layer)**. Marked **Not started**.
+
+---
+
+## 2. Complete Requirements Matrix
+
+### 2.1 Functional Requirements (FR)
+
+| ID | Short Text | Tier | Delivering Module | Status | Evidence (Files & Exact Test Names) |
+|---|---|---|---|---|---|
+| **FR-1** | Follow "Never Trust, Always Verify"; no automatic trust based only on login | MVP | Modules 1–7 | Done | `tests/session.test.js`:<br>- `complete flow: signup -> login -> session created -> GET /api/v1/me -> logout -> old session rejected`<br>`tests/realtime-scenarios.test.js`:<br>- `B2. Attack timeline over sockets: legitimate user socket receives chronological tier-only payloads...` |
+| **FR-2** | Continuously evaluate active sessions and changing security risk | MVP | Modules 6, 7 | Done | `tests/risk-pipeline.test.js`:<br>- `evaluates and persists risk assessment after event commit`<br>`tests/realtime-broadcaster.test.js`:<br>- `records scored event and broadcasts event:recorded followed by risk:updated`<br>`tests/realtime-scenarios.test.js`:<br>- `B2. Attack timeline over sockets...` |
+| **FR-3** | Re-authorize sensitive actions using current security context | MVP | Module 10 | Not started | None (PEP middleware before sensitive routes scheduled for Module 10) |
+| **FR-4** | Operate under assume-breach model; limit impact of compromised session | MVP | Modules 5–7, 10 | Partial | `tests/risk-scoring.test.js`:<br>- `Scenario B (Simulated Takeover Sequence): score 89, tier critical, exact signal list`<br>`tests/realtime-scenarios.test.js`:<br>- `B2. Attack timeline over sockets...`<br>*(Detection/scoring complete; enforcement containment scheduled for Module 10)* |
+| **FR-5** | Adapt access requirements according to current risk level | MVP | Modules 8, 10 | Partial | `tests/policy-decision.test.js`:<br>- `T1. Exhaustive sweep over 2,048 combinations: valid decision, >= BASE_MATRIX cell...`<br>`tests/policy-api.test.js`:<br>- `T8. Real Pipeline Scenarios & Decision Table Verification`<br>*(Module 8 policy matrix and escalation rules complete; PEP adaptive enforcement scheduled for Module 10)* |
+| **FR-6** | Use user, resource, action, and environmental attributes in access decisions | MVP | Modules 6, 8 | Partial | `tests/risk-scoring.test.js`:<br>- `asserts exact invariant across combinatorial permutations`<br>`tests/risk-engine.test.js`:<br>- `evaluates all context, timing, sequence, baseline, and verification signals together`<br>`tests/policy-decision.test.js`:<br>- `T1. Exhaustive sweep over 2,048 combinations: valid decision...`<br>- `T2. Escalation Rules Firing & Boundary Conditions`<br>*(PDP risk scoring and ABAC attribute rule decisioning complete; PEP enforcement scheduled for Module 10)* |
+| **FR-7** | Apply separate security controls to action categories by sensitivity | MVP | Modules 6, 10 | Partial | `tests/risk-scoring.test.js`:<br>- `enforces base action cap: high_impact_action (22) + critical (5) = 27 capped to 25 with -2 adjustment`<br>`tests/security-event-model.test.js`:<br>- `accepts valid metadata.action_sensitivity values (low, medium, high, critical)`<br>*(Sensitivity scoring complete; action-specific enforcement scheduled for Module 10)* |
+| **FR-8** | Provide elevated privileges only when required and for a limited period | MVP | Module 10 | Not started | None (Step-up verification and temporary elevation scheduled for Module 10) |
+| **FR-9** | Automatically expire temporary trust and elevated authorization | MVP | Module 10 | Not started | None (Step-up privilege expiration scheduled for Module 10) |
+| **FR-10** | Register familiar devices/networks as trusted to reduce verification | MVP | Modules 3, 11 | Partial | `tests/device-fingerprint.test.js`:<br>- `identifies existing device fingerprint`<br>`tests/sequence-risk.test.js`:<br>- `untrusted criterion 2: login_success with is_trusted_device === false`<br>*(Device recognition complete; user enrollment workflow scheduled for Module 11)* |
+| **FR-11** | Calculate risk score for sessions and actions using security signals | MVP | Module 6 | Done | `tests/risk-scoring.test.js`:<br>- `Scenario A (Legitimate User Routine Login): score 5, tier low, single signal`<br>- `Scenario B (Simulated Takeover Sequence): score 89, tier critical, exact signal list`<br>`tests/risk-engine.test.js`:<br>- `evaluates all context, timing, sequence, baseline, and verification signals together` |
+| **FR-12** | Distinguish recognized devices from new or changed devices | MVP | Module 3 | Done | `tests/device-fingerprint.test.js`:<br>- `identifies new device fingerprint and persists it`<br>- `identifies existing device fingerprint` |
+| **FR-13** | Use IP information to estimate geographic country and region | MVP | Module 3 | Done | `tests/geo-resolution.test.js`:<br>- `resolves public IPv4 to country and region`<br>- `returns null geo fields for private/loopback IP addresses` |
+| **FR-14** | Optionally use precise location only with explicit user consent | MVP | Module 3 | Done | `tests/geo-resolution.test.js`:<br>- `attaches precise coordinates only when explicitly provided with user consent`<br>- `omits precise coordinates when user consent is not granted` |
+| **FR-15** | Detect geographically inconsistent activity (impossible travel) | MVP | Module 3 | Done | `tests/impossible-travel.test.js`:<br>- `flags impossible travel when speed exceeds threshold`<br>- `calculates Haversine distance and required speed correctly` |
+| **FR-16** | Establish behavioral baselines and identify significant deviations | MVP | Module 4 | Done | `tests/behavioral-baseline.test.js`:<br>- `computes baseline statistics from user event history`<br>`tests/baseline-deviation.test.js`:<br>- `calculates deviation score for activity outside normal hours/locations`<br>`tests/scheduled-baseline-recalculation.test.js`:<br>- `recalculates all users sequentially and synchronizes with SecurityEvent data` |
+| **FR-17** | Detect and distinguish automated/bot-like activity from human activity | MVP | Module 3 | Done | `tests/bot-signal.test.js`:<br>- `detects sub-second rapid request intervals as automation`<br>- `does not flag normal human request timing intervals` |
+| **FR-18** | Compare multiple active sessions to identify suspicious inconsistencies | Future | None | No module owns it | None (Cross-session comparative inconsistency analysis unassigned in roadmap) |
+| **FR-19** | Correlate risk information across connected platforms or tenants | Future | None | No module owns it | None (Multi-tenant/multi-platform correlation out of MVP scope; unassigned in roadmap) |
+| **FR-20** | Correlate activity across users and sessions for coordinated attack patterns | Future | None | No module owns it | None (Cross-user coordinated attack analysis unassigned in roadmap) |
+| **FR-21** | Consider potential impact or blast radius when evaluating risk | MVP | Module 6 | Done | `tests/risk-scoring.test.js`:<br>- `enforces base action cap: high_impact_action (22) + critical (5) = 27 capped to 25 with -2 adjustment`<br>`tests/sequence-risk.test.js`:<br>- `(b) Sequence ending in high_impact_action matches cascade and takeover (45 raw), capped with -20 adjustment` |
+| **FR-22** | Combine related risk signals to increase risk assessment | MVP | Modules 5, 6 | Done | `tests/risk-scoring.test.js`:<br>- `all three context flags active: 10 + 10 + 20 = 40, capped to 25 with -15 adjustment`<br>`tests/sequence-risk.test.js`:<br>- `several matching rules come back in SEQUENCE_RULES order, each once`<br>`tests/risk-pipeline.test.js`:<br>- `Scenario B through the pipeline only: scores exactly 84, critical, invariant holds` |
+| **FR-23** | Automatically expire sessions inactive beyond configured timeout | MVP | Module 1 | Partial | `tests/session.test.js`:<br>- `Redis session expires according to TTL`<br>*(Hard 15-minute TTL active in `sessionService.js`; sliding idle refresh on activity not yet implemented)* |
+| **FR-24** | Require additional verification for sensitive pages/actions on risk | MVP | Module 10 | Not started | None (Step-up enforcement middleware scheduled for Module 10) |
+| **FR-25** | Enforce maximum lifetime for sessions | MVP | Module 1 | Partial | `tests/session.test.js`:<br>- `Redis session expires according to TTL`<br>`tests/auth.test.js`:<br>- `POST /api/v1/auth/login returns JWT token and session ID on successful login`<br>*(Session expires at fixed TTL; distinct maximum lifetime separate from idle window not yet implemented)* |
+| **FR-26** | Continuously monitor active sessions for changes in security risk | MVP | Modules 6, 7 | Done | `tests/risk-pipeline.test.js`:<br>- `evaluates and persists risk assessment after event commit`<br>`tests/realtime-broadcaster.test.js`:<br>- `records scored event and broadcasts event:recorded followed by risk:updated`<br>`tests/realtime-scenarios.test.js`:<br>- `B2. Attack timeline over sockets...` |
+| **FR-27** | Automatically expire temporary trust and elevated privileges | MVP | Module 10 | Not started | None (Elevated privilege expiration scheduled for Module 10) |
+| **FR-28** | Apply minimal friction to low risk, stronger verification to high risk | MVP | Modules 8, 10 | Partial | `tests/policy-decision.test.js`:<br>- `T1. Exhaustive sweep over 2,048 combinations: valid decision, >= BASE_MATRIX cell...`<br>`tests/policy-api.test.js`:<br>- `T8. Real Pipeline Scenarios & Decision Table Verification`<br>*(Module 8 base matrix maps low risk to allow and high risk to delay/block; PEP enforcement scheduled for Module 10)* |
+| **FR-29** | Allow administrators to configure responses for signals/combinations | MVP | Modules 8, 9 | Partial | `tests/policy-decision.test.js`:<br>- `T1. Exhaustive sweep over 2,048 combinations: valid decision...`<br>- `T2. Escalation Rules Firing & Boundary Conditions`<br>`tests/policy-loader.test.js`:<br>- `validates default-v1.json successfully`<br>- `loads and freezes candidate policy with custom escalation and threshold configurations`<br>*(Policy-as-code JSON rule configuration and programmatic hot-reloading complete; administrator UI/API management endpoints deferred to Module 12)* |
+| **FR-30** | Support response actions: monitor, re-verify, delay, and block | MVP | Modules 8, 10 | Partial | `tests/policy-decision.test.js`:<br>- `T1. Exhaustive sweep over 2,048 combinations: valid decision...`<br>- `T5. Recommended Actions, Review Flag, Explanations, and Enforcement Mode`<br>`tests/policy-api.test.js`:<br>- `T7. POST /api/v1/policy/evaluate Authentication, Authorization, Validation & Persistence`<br>*(Module 8 produces all 5 ordered decision tiers; PEP enforcement scheduled for Module 10)* |
+| **FR-31** | Provide security response recommendations rather than automatic blocking | MVP | Module 8 | Done | `tests/policy-decision.test.js`:<br>- `recommended_actions is deterministic and derives from decision and reasons`<br>- `enforcement_mode strictly follows config`<br>`tests/policy-api.test.js`:<br>- `response key set equals exactly the allowlist with no scores, signals, rule ids, or admin_facing` |
+| **FR-32** | Allow high-impact actions to enter cooling-off cancellation period | MVP | Module 10 | Not started | None (Cooling-off delay and cancellation scheduled for Module 10) |
+| **FR-33** | Provide users with clear explanations when activity is flagged/restricted | MVP | Modules 6, 7, 12 | Done | `tests/risk-engine.test.js`:<br>- `builds clear user-facing and technical admin-facing explanations`<br>`tests/realtime-broadcaster.test.js`:<br>- `user room receives tier-only risk:updated payload without numeric score or weights`<br>*(UI dashboard presentation deferred to Module 12)* |
+| **FR-34** | Provide administrators with detailed technical explanations | MVP | Modules 6, 7, 12 | Done | `tests/risk-engine.test.js`:<br>- `builds clear user-facing and technical admin-facing explanations`<br>`tests/realtime-broadcaster.test.js`:<br>- `admin room receives full risk:updated payload with risk_score and contributing signals` |
+| **FR-35** | Provide interactive representation of signals and relationships | MVP | Module 12 | Not started | None (React Flow interactive explanation graph scheduled for Module 12) |
+| **FR-36** | Support proactive identification of emerging threats and patterns | Future | None | No module owns it | None (Unsupervised threat pattern mining unassigned in roadmap) |
+| **FR-37** | Separate Policy Decision Point (PDP) from Policy Enforcement Point (PEP) | MVP | Modules 6, 10 | Partial | `tests/risk-scoring.test.js`:<br>- `riskScoring.js is strictly pure (no DB, redis, clock, random, env, or service imports)`<br>`tests/risk-engine.test.js`:<br>- `evaluates all context, timing, sequence, baseline, and verification signals together`<br>*(PDP Risk Engine complete; PEP enforcement middleware scheduled for Module 10)* |
+| **FR-38** | Provide APIs and webhooks for integrating applications | MVP | Modules 6.4, 7, 11 | Partial | `tests/risk-api.test.js`:<br>- `evaluates risk for authenticated caller with valid parameters`<br>`tests/realtime-server.test.js`:<br>- `initSocketServer attaches Socket.IO to existing HTTP server`<br>*(Risk REST & Socket.IO stream complete; external webhook integration scheduled for Module 11)* |
+| **FR-39** | Provide open and documented security-event schema | MVP | Modules 2, 11 | Done | `tests/security-event-model.test.js`:<br>- `creates a valid Security Event with all schema fields`<br>- `accepts all 13 recognized event types from API contract` |
+| **FR-40** | Support security policies stored and versioned as code | MVP | Module 9 | Done | `tests/policy-loader.test.js`:<br>- `validates default-v1.json successfully`<br>- `deep-freezes loaded policy to prevent runtime mutation`<br>- `atomic pointer swap: reloadActivePolicy successfully swaps to candidate policy without restart`<br>- `fails closed with PolicyLoadError when file does not exist or schema is invalid` |
+| **FR-41** | Allow proposed policies to be tested against historical activity | MVP | Module 9 | Done | `tests/policy-replay.test.js`:<br>- `T-REP-02: evaluates synthetic benign scenarios against baseline policy to produce expected decisions`<br>- `T-REP-03: evaluates synthetic harmful scenarios against baseline policy to produce protective decisions`<br>- `T-REP-04: zero-persistence invariant: replay executes without MySQL or Redis side effects`<br>- `T-REP-05: calculates confusion matrix metrics (TP, FP, TN, FN, FPR, FNR) accurately`<br>- `T-REP-07: version comparison: compares baseline vs candidate policy and detects decision changes` |
+| **FR-42** | Provide extensible plugin mechanism for community risk signals | Future | None | No module owns it | None (Pluggable collector architecture out of MVP scope; unassigned in roadmap) |
+| **FR-43** | Support self-hosted deployment on organizational infrastructure | MVP | Module 1 | Done | `tests/data-model.test.js`:<br>- `connects to database and executes raw query successfully`<br>*(Docker Compose multi-container environment verified)* |
+| **FR-44** | Provide signed, short-lived trust assertions for external services | Future | None | No module owns it | None (Federated trust assertions unassigned in roadmap) |
+| **FR-45** | Allow users/organizations to configure security and friction levels | MVP | Module 11 | Not started | None (User/org friction preference endpoints scheduled for Module 11) |
+
+---
+
+### 2.2 Non-Functional Requirements (NFR)
+
+| ID | Short Text | Tier | Delivering Module | Status | Evidence (Files & Exact Test Names) |
+|---|---|---|---|---|---|
+| **NFR-1** | Ensure trust assertions are signed and automatically expire | MVP | Module 1 | Done | `tests/auth.test.js`:<br>- `POST /api/v1/auth/login returns JWT token and session ID on successful login`<br>- `authenticateToken rejects expired JWT tokens` |
+| **NFR-2** | Protect sensitive information in transit and at rest | MVP | Module 1 & Future | Partial | `tests/auth.test.js`:<br>- `hashes passwords with bcrypt and never stores plaintext`<br>*(bcrypt hashing and TLS transport complete; database encryption at rest documented as future work)* |
+| **NFR-3** | Maintain audit trail of security decisions and policy changes | MVP | Modules 2, 6 | Done | `tests/security-event-model.test.js`:<br>- `creates a valid Security Event with all schema fields`<br>`tests/risk-engine.test.js`:<br>- `persists complete assessment record in risk_assessments table` |
+| **NFR-4** | Apply secure failure behavior when security component is unavailable | MVP | Modules 6.3a, 7.2 | Done | `tests/risk-engine.test.js`:<br>- `handles database error gracefully and returns unavailable result`<br>`tests/realtime-broadcaster.test.js`:<br>- `handles scoring failure gracefully and broadcasts risk:updated with unavailable payload` |
+| **NFR-5** | Require clear and revocable user consent for precise location | MVP | Module 3 | Done | `tests/geo-resolution.test.js`:<br>- `attaches precise coordinates only when explicitly provided with user consent`<br>- `omits precise coordinates when user consent is not granted` |
+| **NFR-6** | Limit collection and use of sensitive security info to necessary functions | MVP | Module 7.2 | Done | `tests/realtime-broadcaster.test.js`:<br>- `user room receives sanitized event:recorded payload without raw IP or hardware fingerprint`<br>- `A3: privacy for admin payloads: serialized admin risk:updated and event:recorded contain no IP, fingerprint, lat/long, or password hash, and key sets equal allowlist` |
+| **NFR-7** | Perform risk evaluation fast enough for real-time security decisions | MVP | Modules 5, 6 | Done | `tests/redis-sequence-cache.test.js`:<br>- `reads and writes active sequence from Redis within milliseconds`<br>`tests/risk-scoring.test.js`:<br>- `asserts exact invariant across combinatorial permutations`<br>*(Sub-millisecond pure function evaluation)* |
+| **NFR-8** | Support independent scaling of risk evaluation and enforcement | Future | None | No module owns it | None (Monolithic single-process MVP; service separation documented as future work) |
+| **NFR-9** | Documented, versioned interfaces for extending risk-signal plugins | Future | None | No module owns it | None (Plugin architecture documented as future work; unassigned in roadmap) |
+| **NFR-10** | Support addition of new signals without major component rewrites | MVP | Module 6 | Done | `tests/risk-scoring.test.js`:<br>- `riskConfig is deeply frozen`<br>- `CATEGORY_CAPS sum to exactly 100`<br>- `inputs and config are deep-frozen and never mutated across repeated calls` |
+| **NFR-11** | Provide security explanations understandable by ordinary users | MVP | Modules 6, 7 | Done | `tests/risk-engine.test.js`:<br>- `builds clear user-facing and technical admin-facing explanations`<br>`tests/realtime-broadcaster.test.js`:<br>- `user room receives tier-only risk:updated payload without numeric score or weights` |
+| **NFR-12** | Apply security friction proportionally to assessed risk | MVP | Modules 8, 10 | Partial | `tests/policy-decision.test.js`:<br>- `T1. Exhaustive sweep over 2,048 combinations: valid decision, >= BASE_MATRIX cell...`<br>`tests/policy-api.test.js`:<br>- `T8. Real Pipeline Scenarios & Decision Table Verification`<br>*(Module 8 base matrix and escalation rules establish proportional friction levels; PEP enforcement scheduled for Module 10)* |
+| **NFR-13** | Support self-hosted deployment using standard container environments | MVP | Module 1 | Done | `tests/data-model.test.js`:<br>- `connects to database and executes raw query successfully`<br>*(Self-contained Docker Compose setup)* |
+| **NFR-14** | Avoid unnecessary dependency on specific external service/provider | MVP | Modules 1–3 | Done | `tests/geo-resolution.test.js`:<br>- `returns null geo fields for private/loopback IP addresses`<br>- `database not found ... Geolocation resolution is disabled`<br>*(Local MaxMind file fallback; zero external vendor dependencies)* |
+| **NFR-15** | Provide APIs and event interfaces based on open, documented standards | MVP | Modules 2, 6.4, 7 | Done | `tests/security-event-model.test.js`:<br>- `creates a valid Security Event with all schema fields`<br>`tests/risk-api.test.js`:<br>- `evaluates risk for authenticated caller with valid parameters`<br>`tests/realtime-server.test.js`:<br>- `initSocketServer attaches Socket.IO to existing HTTP server` |
+| **NFR-16** | Allow external applications to consume events and decisions | MVP | Modules 6.4, 7, 11 | Partial | `tests/risk-api.test.js`:<br>- `evaluates risk for authenticated caller with valid parameters`<br>`tests/realtime-broadcaster.test.js`:<br>- `admin room receives full risk:updated payload with risk_score and contributing signals`<br>*(External webhook delivery scheduled for Module 11)* |
+| **NFR-17** | Allow security policies/responses to be changed without redeployment | MVP | Module 9 | Done | `tests/policy-loader.test.js`:<br>- `atomic pointer swap: reloadActivePolicy successfully swaps to candidate policy without restart`<br>- `atomic pointer swap failure: invalid candidate keeps active policy unchanged and throws` |
+
+---
+
+## 3. Granular Module 7 Real-Time Delivery Evidence
+
+The table below retains the granular sub-module verification records established in Module 7.1, 7.2, and 7.3:
+
+| Sub-Requirement ID | Description | Delivering Sub-Module | Status | Evidence (Files & Exact Test Names) |
+|---|---|---|---|---|
+| **M7-SRV-01** | Socket.IO server initialization on HTTP server with CORS support | 7.1 | Done | `tests/realtime-server.test.js`:<br>- `initSocketServer attaches Socket.IO to existing HTTP server`<br>- `closeSocketServer closes server and cleans up resources` |
+| **M7-AUTH-USER** | User handshake auth via JWT, session validation against Redis | 7.1 | Done | `tests/realtime-server.test.js`:<br>- `rejects connection when no credentials provided`<br>- `rejects connection with invalid JWT token`<br>- `rejects connection with expired JWT token`<br>- `rejects connection when session is not found in Redis`<br>- `authenticates user socket with valid JWT and active Redis session`<br>- `rejects connection when JWT token lacks session_id claim` |
+| **M7-AUTH-ADMIN** | Admin handshake auth via constant-time `ACTIONGUARD_ADMIN_API_KEY` (≥32 chars, header/payload only, URL rejected, no fallback) | 7.1 | Done | `tests/realtime-server.test.js`:<br>- `authenticates admin socket with valid ACTIONGUARD_ADMIN_API_KEY in auth object`<br>- `authenticates admin socket with valid ACTIONGUARD_ADMIN_API_KEY in headers`<br>- `rejects admin handshake when ACTIONGUARD_ADMIN_API_KEY is not configured`<br>- `rejects admin handshake when ACTIONGUARD_ADMIN_API_KEY is shorter than 32 chars`<br>- `rejects admin handshake with incorrect apiKey`<br>- `rejects admin handshake when apiKey is passed via query string`<br>- `does not fall back to user JWT auth if apiKey is invalid` |
+| **M7-ROOMS** | Room isolation: user sockets join `user:<userId>`, admin sockets join `admin` | 7.1 | Done | `tests/realtime-server.test.js`:<br>- `places authenticated user socket into user:<userId> room`<br>- `places authenticated admin socket into admin room` |
+| **M7-REVOKE** | Session revocation: user socket periodically revalidates against Redis, emits `session:terminated` before disconnect on session invalidation | 7.1 | Done | `tests/realtime-server.test.js`:<br>- `emits session:terminated and disconnects socket when session is invalidated via sessionService.invalidateSession`<br>- `delivers session:terminated before disconnect event`<br>- `cleans up eventBus listener on closeSocketServer without leaking listeners` |
+| **M7-PIPE-HOOK** | In-process event bus hook on `pipeline:event_processed` after DB commit; no events emitted for null user_id; error isolation | 7.2 | Done | `tests/realtime-broadcaster.test.js`:<br>- `A1: recordSecurityEvent for an event with no user_id: no pipeline:event_processed, no socket messages`<br>- `A2: exactly one pipeline:event_processed per recordSecurityEvent call for scored, unscored, and scoring-failure cases`<br>- `records scored event and broadcasts event:recorded followed by risk:updated`<br>- `records unscored event and broadcasts event:recorded but NOT risk:updated`<br>- `handles scoring failure gracefully and broadcasts risk:updated with unavailable payload` |
+| **M7-BROAD-USER** | User stream: push-only, ordered `event:recorded` then `risk:updated`; tier-only risk payload; privacy sanitization | 7.2 | Done | `tests/realtime-broadcaster.test.js`:<br>- `user room receives tier-only risk:updated payload without numeric score or weights`<br>- `user room receives sanitized event:recorded payload without raw IP or hardware fingerprint`<br>- `A4: coarse_location is null when the event context has no geo fields, and filled when it has them (assert both)` |
+| **M7-BROAD-ADMIN** | Admin stream: full risk assessment telemetry with numeric risk_score and contributing signals breakdown; allowlist schema enforcement | 7.2 | Done | `tests/realtime-broadcaster.test.js`:<br>- `admin room receives full risk:updated payload with risk_score and contributing signals`<br>- `admin room receives full event:recorded payload matching schema`<br>- `A3: privacy for admin payloads: serialized admin risk:updated and event:recorded contain no IP, fingerprint, lat/long, or password hash, and key sets equal allowlist` |
+| **M7-ISOLATION** | Cross-user tenant/user isolation: messages for User A are delivered only to User A sockets; User B receives zero messages | 7.2, 7.3 | Done | `tests/realtime-broadcaster.test.js`:<br>- `isolates user broadcasts: user B does not receive user A events`<br>`tests/realtime-scenarios.test.js`:<br>- `B1. Multi-session: user A has two sockets (two sessions), action on session 1 delivers event:recorded then risk:updated to both sockets exactly once each; user B receives nothing` |
+| **M7-SCEN-ATTACK** | End-to-end attack timeline over HTTP and real-time streaming: login from new device/RU IP, recovery email change, password change; score progression to critical | 7.3 | Done | `tests/realtime-scenarios.test.js`:<br>- `B2. Attack timeline over sockets: legitimate user socket receives chronological tier-only payloads, final tier critical; admin receives full payloads with final score 84 and weights summing to 84; login has is_new_device and stubbed coarse location` |
+| **M7-DOC-LIMIT** | Documented limitations verified: hijacker session on same account joins account room and receives account-wide alerts | 7.3 | Done | `tests/realtime-scenarios.test.js`:<br>- `B3. Documented limitation: a second socket of the same account (a hijacker session) receives account-wide events too` |
+
+---
+
+## 4. Requirements Summary Statistics
+
+### 4.1 Counts per Status (All 62 Requirements: 45 FR + 17 NFR)
+
+| Status | Functional (FR) | Non-Functional (NFR) | Total Requirements | Percentage |
+|---|---|---|---|---|
+| **Done** | 19 | 12 | **31** | 50.0% |
+| **Partial** | 12 | 3 | **15** | 24.2% |
+| **Not started** | 8 | 0 | **8** | 12.9% |
+| **No module owns it** | 6 | 2 | **8** | 12.9% |
+| **Total** | **45** | **17** | **62** | **100.0%** |
+
+---
+
+### 4.2 MVP-Tier Requirements Breakdown (54 Requirements Total)
+
+Among the **54 MVP-tier requirements** (excluding the 8 Future-tier requirements that are unowned), the current delivery breakdown is:
+- **Done:** 31 requirements (57.4%)
+- **Partial:** 15 requirements (27.8%)
+- **Not started:** 8 requirements (14.8%)
+- **Owned by no module:** 0 requirements (0%)
+
+#### (A) MVP-Tier Requirements that are Partial (15):
+1. **FR-4**: Operate under assume-breach model; limit impact of compromised account/session *(Modules 5–7 detection complete; Module 10 containment not started)*.
+2. **FR-5**: Adapt access requirements according to current risk level *(Module 8 policy matrix and escalation rules complete; PEP adaptive enforcement scheduled for Module 10)*.
+3. **FR-6**: Use user, resource, action, and environmental attributes when making access decisions *(PDP risk scoring and ABAC attribute rule decisioning complete; PEP enforcement scheduled for Module 10)*.
+4. **FR-7**: Apply separate security controls to individual action categories according to sensitivity *(Module 6 sensitivity weights complete; Module 10 enforcement not started)*.
+5. **FR-10**: Allow familiar devices or networks to be registered as trusted *(Module 3 device fingerprint recognition complete; Module 11 user enrollment not started)*.
+6. **FR-23**: Automatically expire sessions inactive beyond configured timeout *(Fixed 15-minute TTL in `sessionService.js` complete; sliding inactivity refresh not implemented)*.
+7. **FR-25**: Enforce maximum lifetime for sessions *(Hard TTL expiry complete; distinct maximum lifetime separate from idle window not implemented)*.
+8. **FR-28**: Apply minimal friction to low risk, stronger verification to high risk *(Module 8 base matrix maps low risk to allow and high risk to delay/block; PEP enforcement scheduled for Module 10)*.
+9. **FR-29**: Allow administrators to configure responses for signals/combinations *(Modules 8 & 9 Policy-as-code JSON rule configuration and programmatic hot-reloading complete; admin UI/API management endpoints deferred to Module 12)*.
+10. **FR-30**: Support response actions: monitor, re-verify, delay, and block *(Module 8 produces all 5 ordered decision tiers; PEP enforcement scheduled for Module 10)*.
+11. **FR-37**: Separate Policy Decision Point (PDP) from Policy Enforcement Point (PEP) *(Module 6 PDP risk engine & Module 8 PDP policy engine complete; Module 10 PEP middleware not started)*.
+12. **FR-38**: Provide APIs and webhooks for integrating applications *(Module 6.4 REST, Module 7 WebSocket, & Module 8 Policy evaluate APIs complete; Module 11 external webhooks not started)*.
+13. **NFR-2**: Protect sensitive information in transit and at rest *(bcrypt password hashing and TLS complete; database encryption at rest deferred to future)*.
+14. **NFR-12**: Apply security friction proportionally to assessed risk *(Module 8 base matrix and escalation rules establish proportional friction levels; PEP enforcement scheduled for Module 10)*.
+15. **NFR-16**: Allow external applications to consume relevant events and decisions *(REST risk/policy APIs and WebSocket stream complete; Module 11 webhook delivery not started)*.
+
+#### (B) MVP-Tier Requirements that are Not Started (8):
+1. **FR-3**: Re-authorize sensitive actions using current security context *(Module 10)*.
+2. **FR-8**: Provide elevated privileges only when required and for a limited period *(Module 10)*.
+3. **FR-9**: Automatically expire temporary trust and elevated authorization *(Module 10)*.
+4. **FR-24**: Require additional verification for sensitive pages or actions *(Module 10)*.
+5. **FR-27**: Automatically expire temporary trust and elevated privileges *(Module 10)*.
+6. **FR-32**: Allow high-impact actions to enter configurable cooling-off cancellation period *(Module 10)*.
+7. **FR-35**: Provide interactive representation of signals and relationships *(Module 12)*.
+8. **FR-45**: Allow users and organizations to configure appropriate security and friction levels *(Module 11)*.
+
+#### (C) Requirements Owned by No Module (8 — All Future Tier):
+1. **FR-18**: Compare multiple active sessions to identify suspicious inconsistencies *(Future)*.
+2. **FR-19**: Correlate relevant risk information across connected platforms or tenants *(Future)*.
+3. **FR-20**: Correlate activity across users and sessions to identify coordinated attack patterns *(Future)*.
+4. **FR-36**: Support proactive identification of emerging threats and suspicious activity patterns *(Future)*.
+5. **FR-42**: Provide extensible plugin mechanism for community-developed risk signals *(Future)*.
+6. **FR-44**: Provide signed and short-lived trust assertions that other services can securely verify *(Future)*.
+7. **NFR-8**: Support independent scaling of risk evaluation and enforcement components *(Future)*.
+8. **NFR-9**: Provide documented and versioned interfaces for extending platform with additional risk-signal plugins *(Future)*.

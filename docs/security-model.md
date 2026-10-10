@@ -50,8 +50,13 @@ Response scales with that risk rather than following a fixed rule: low risk is l
 
 ## 10. Known Limitations
 
-Any authenticated caller, including a hijacked session, can read its own risk breakdown and probe the advisory endpoint; the scoring rules are open source, so the exposure is probing volume rather than secrecy; mitigations are rate limiting on both endpoints (Module 11) and role-gating the full breakdown for administrators (Module 12). Additionally, administrative access to real-time telemetry currently relies on a static pre-shared key (ACTIONGUARD_ADMIN_API_KEY) that reads every user's security telemetry across the platform; fine-grained administrative roles and tenant segregation are not yet implemented.
+Any authenticated caller, including a hijacked session, can read its own risk breakdown and probe the advisory endpoint; the scoring rules are open source, so the exposure is probing volume rather than secrecy; mitigations are rate limiting on both endpoints (Module 11) and role-gating the full breakdown for administrators (Module 12). Additionally, administrative access to real-time telemetry currently relies on a static pre-shared key (ACTIONGUARD_ADMIN_API_KEY) that reads every user's security telemetry across the platform; fine-grained administrative roles and tenant segregation are not yet implemented. Furthermore:
+* **Account-wide room exposure:** Account-wide rooms (`user:<userId>`) are visible to any socket holding that account's credentials, including a hijacker's session. This includes the victim's coarse locations (`coarse_location`) and novelty flags (`is_new_device`, `is_new_country`).
+* **REST vs Socket payload discrepancy:** `GET /api/v1/sessions/:id` and `POST /api/v1/risk/evaluate` still return the full technical risk breakdown (numeric scores, contributing signals, admin explanations) to JWT callers, whereas WebSocket broadcasts to user sockets are tier-only; unifying this boundary is slated for Module 11.
+* **Transient Redis errors during socket revalidation:** Sockets skip a revalidation tick when Redis errors or becomes temporarily unreachable, leaving connected sockets open until the next successful tick (new connection handshakes, however, still fail closed).
+* **Static Admin Key Revocation:** The administrative API key (`ACTIONGUARD_ADMIN_API_KEY`) is read from environment configuration at startup and cannot be rotated or revoked without restarting the application server.
 
 ## Summary
 
 ActionGuard's security model can be stated in one sentence: **trust is continuous, granular, and revocable, and the system's job is to detect and contain risky account activity before it becomes irreversible — not to guarantee that compromise never happens.** Every principle above exists in service of that one honest, testable claim.
+

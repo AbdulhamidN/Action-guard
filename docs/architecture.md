@@ -55,6 +55,7 @@ Not yet in scope for this build: multi-tenant isolation, a third-party plugin sy
                    PEP
        (Express enforcement middleware)
                     │
+                    │
           ┌─────────┼──────────┐
           ▼         ▼          ▼
         Allow     Reverify   Delay / Block
@@ -62,9 +63,20 @@ Not yet in scope for this build: multi-tenant isolation, a third-party plugin sy
                               ▼
                     Session containment
                     (if risk is critical)
+                              │
+                              ▼
+                    In-Process Event Bus
+                 (pipeline:event_processed)
+                              │
+                              ▼
+                   Socket.IO Server
+          ┌───────────────────┴───────────────────┐
+          ▼                                       ▼
+     User Rooms                               Admin Room
+ (tier-only, sanitized)                 (full risk telemetry)
 ```
 
-All decisions and events are written to MySQL and cached in Redis at each stage, and pushed live to the dashboard over Socket.IO (see Sections 5 and 8).
+All decisions and events are written to MySQL and cached in Redis at each stage, and pushed live to connected clients over Socket.IO via an in-process Event Bus (see Sections 4, 5, and 8).
 
 ## 4. Main Components
 
@@ -90,7 +102,17 @@ Weights and thresholds are configurable rather than hardcoded permanently, and a
 
 ### Policy Engine (PDP — part 2)
 
-Maps a given risk score and action sensitivity to a response tier — allow, monitor, reverify, delay, or block — using Attribute-Based Access Control rules (via Casbin, or a simpler hand-rolled lookup table). Escalates more aggressively when multiple risk signals combine than when only one fires.
+The Policy Engine (`src/utils/policyDecision.js`, `src/services/policyService.js`, `src/config/policyConfig.js`) determines what security response should occur for an action based on evaluated risk attributes, action sensitivity, and signal combinations.
+
+Rather than introducing external policy engines such as Casbin, ABAC is implemented as a lightweight, strictly pure in-memory attribute-rule engine with zero external dependencies:
+
+* **Ordered Response Tiers:** Decisions follow a strict hierarchy: `allow` < `monitor` < `reverify` < `delay` < `block`.
+* **Base Matrix:** Maps the evaluated risk tier (`low`, `medium`, `high`, `critical`) and effective action sensitivity (`low`, `medium`, `high`, `critical`) to a baseline decision. Effective action sensitivity is the maximum of the server default for the event type and any caller-provided sensitivity (callers can raise sensitivity, but can never lower it).
+* **Escalation Rules:** Evaluate specific risk signal combinations (such as impossible travel with novel devices or countries, credential change cascades, takeover progressions, or automation timing bursts). Escalation rules can only raise a decision, never lower a stricter base matrix decision.
+* **Deterministic Output Invariant:** The overall decision is strictly the maximum (strictest) decision among all fired reasons (`decision === max(reason.decision)`).
+* **Fail-Safe Mode:** When risk evaluation is temporarily unavailable, the engine applies fail-safe decisions based on action sensitivity (low/medium → `monitor`, high/critical → `block`), setting `requires_review: true`.
+* **Recommended Actions & Explanations:** Derives deterministic recommended actions (e.g., `require_step_up`, `delay_with_cancel`, `notify_user`, `admin_review`), `enforcement_mode` (`automatic` or `recommend_only`), user-facing explanations free of raw metrics or breach claims, and administrative reason traces.
+* **Separation of Concerns:** Module 8 decides only; it enforces nothing (enforcement middleware is in Module 10), persists no decisions (decision audit persistence in Module 10b), and delegates policy configuration to the versioned Policy-as-Code loader (`src/services/policyLoader.js`). Advisory decisions are exposed via `POST /api/v1/policy/evaluate`, which enforcement components must never trust as authorization truth.
 
 ### Policy Enforcement Point (PEP)
 
@@ -100,9 +122,11 @@ Express middleware that calls the Policy Engine before a sensitive route execute
 
 Manages session lifecycle in Redis: idle timeout, maximum session age, and automatic expiration of any elevated privilege granted through step-up verification.
 
-### Policy Management
+### Policy Management (Policy-as-Code & Replay Testing)
 
-Stores risk-engine weights and policy-engine rules as versioned YAML/JSON files rather than buried constants, so changes can be reviewed like code. Includes a replay-testing harness (Jest) that runs recorded event sequences against a policy file before it goes live, reporting false-positive/false-negative impact.
+Stores risk-engine response matrices, escalation rules, fail-safe fallbacks, and action sensitivity mappings as versioned JSON policy files (`policies/default-v1.json`, `policies/candidate-strict-v1.json`) validated by a pure schema validator (`src/utils/policyValidator.js`).
+The policy loader (`src/services/policyLoader.js`) loads, validates, deep-freezes, and atomically hot-reloads the active policy reference (`reloadActivePolicy`) without server restarts, and maintains strict candidate isolation during offline evaluations.
+Includes a Jest-based offline replay testing harness (`src/replay/replayHarness.js`) that evaluates historical and synthetic event sequences against candidate policies in-memory with zero database/Redis persistence, reporting confusion matrix metrics (TP, FP, TN, FN, FPR, FNR) and decision diffs before live activation.
 
 ### Explainability & Dashboard
 
@@ -111,6 +135,14 @@ A React/Tailwind frontend that displays current risk state, active sessions, the
 ### Audit & Event Storage
 
 MySQL holds all persistent state: users, sessions, events, action sequences, baselines, policy versions, and decisions — forming the audit trail used for both the dashboard and replay testing.
+
+### In-Process Event Bus
+
+A centralized, synchronous EventEmitter wrapper (`src/events/eventBus.js`) that provides isolated event dispatching (`safeEmit`) across the application. When security events are committed and scored in the post-commit pipeline, the event bus emits `pipeline:event_processed` to decouple data ingestion and risk scoring from real-time streaming and third-party notifications, ensuring broadcaster errors cannot break request or event persistence flows.
+
+### Real-Time WebSocket Server (Socket.IO)
+
+A real-time push streaming server (`src/realtime/socketServer.js`) mounted on the shared HTTP server. It authenticates client handshakes using user JWT tokens or a constant-time verified `ADMIN_API_KEY` (minimum 32 characters, header/payload only). Clients are partitioned into isolated rooms (`user:<userId>` and `admin`). Sockets continuously revalidate session status against Redis, receive immediate `session:terminated` disconnect notifications upon logout or invalidation, and receive live sanitized broadcasts (`risk:updated`, `event:recorded`). End-user payloads are strictly tier-only and privacy-sanitized (no raw IP addresses, no hardware fingerprints, no GPS coordinates, no raw numeric risk scores); administrators receive full signal telemetry and score breakdowns.
 
 **Not built in this MVP:** a third-party plugin loader/registry (Signal Collectors are hardcoded, not pluggable), and multi-tenant data isolation (no `tenant_id` boundary — this is a single-organization deployment).
 
@@ -125,8 +157,7 @@ Event is written to MySQL (event schema)
                 ↓
 Signal Collectors attach device / IP-geo / travel data
                 ↓
-Correlation Engine groups it into the active sequence
-(Redis + MySQL)
+Correlation Engine groups it into the active sequence (Redis + MySQL)
                 ↓
 Baseline module scores deviation from the user's own history
                 ↓
@@ -136,7 +167,10 @@ Policy Engine maps score + action sensitivity → response tier
                 ↓
 PEP enforces the decision on the route
                 ↓
-Decision + updated risk state pushed live via Socket.IO
+Event Bus receives post-commit notification: eventBus.safeEmit('pipeline:event_processed')
+                ↓
+Socket.IO broadcaster dispatches sanitized risk:updated and event:recorded payloads
+(Tier-only to user:<userId>, full telemetry to admin room)
                 ↓
 Event, signals, and decision are logged for audit and replay testing
 ```
@@ -180,7 +214,7 @@ Users
   │
   ├── Devices (fingerprints, trusted-device flags)
   │
-  ├── Sessions (Redis-backed, persisted on close)
+  ├── Sessions (Redis-backed, persisted on creation)
   │
   ├── Behavioral Baselines (per-user stats)
   │

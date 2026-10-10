@@ -6,6 +6,7 @@ const eventsRouter = require('./routes/events');
 const sequencesRouter = require('./routes/sequences');
 const riskRouter = require('./routes/risk');
 const sessionsRouter = require('./routes/sessions');
+const policyRouter = require('./routes/policy');
 
 const app = express();
 
@@ -36,5 +37,8 @@ app.use('/api/v1/risk', riskRouter);
 
 // Sessions query routes (PDP session state inspection)
 app.use('/api/v1/sessions', sessionsRouter);
+
+// Policy decision routes (PDP advisory layer)
+app.use('/api/v1/policy', policyRouter);
 
 module.exports = app;
