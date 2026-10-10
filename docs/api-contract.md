@@ -95,6 +95,66 @@ verification_success
 verification_failed
 ```
 
+### POST `/api/v1/risk/evaluate`
+
+Evaluates the risk of a proposed security event on behalf of the authenticated caller without committing the event to persistent storage, sequence logs, or Redis caches.
+
+* **Authentication:** User JWT Bearer token (`Authorization: Bearer <token>`). The `user_id` provided in the request body must match the authenticated user identity (`req.user.id`), otherwise returns `403 Forbidden`.
+* **Advisory Only:** This endpoint provides advisory risk assessment only. It generates no state mutations, persists no records to `risk_assessments` or sequence tables, and must never be trusted by authorization or audit enforcement as ground truth.
+* **Server Timestamp:** The evaluation timestamp is assigned by the server upon request receipt. Any client-provided timestamp is ignored.
+
+Request body:
+
+```json
+{
+  "user_id": "usr_12345",
+  "event_type": "password_change",
+  "session_id": "sess_98765",
+  "context": {
+    "ip_address": "198.51.100.1",
+    "device_fingerprint": "device_fp_abc123"
+  },
+  "metadata": {
+    "action_sensitivity": "critical"
+  }
+}
+```
+
+Success response (`200 OK`):
+
+```json
+{
+  "risk_score": 84,
+  "risk_tier": "critical",
+  "contributing_signals": [
+    { "signal": "base_action_password_change", "category": "base_action", "weight": 20 },
+    { "signal": "action_sensitivity_critical", "category": "base_action", "weight": 5 },
+    { "signal": "seq_rapid_credential_cascade", "category": "sequence", "weight": 20 }
+  ],
+  "explanation": {
+    "user_facing": "Elevated risk pattern observed across multiple security indicators. Administrative review or re-authentication may be required.",
+    "admin_facing": "Risk score 84 (tier: critical). Contributing signals: base_action_password_change (+20), action_sensitivity_critical (+5), seq_rapid_credential_cascade (+20)."
+  },
+  "evaluated_at": "2026-10-09T14:00:00.000Z"
+}
+```
+
+Unavailable response (`503 Service Unavailable`):
+
+```json
+{
+  "status": "unavailable",
+  "risk_score": null,
+  "risk_tier": null,
+  "contributing_signals": [],
+  "error_code": "risk_evaluation_failed",
+  "explanation": {
+    "user_facing": "Security risk evaluation is temporarily unavailable.",
+    "admin_facing": "Risk engine failed to evaluate context: risk_evaluation_failed."
+  }
+}
+```
+
 ### POST `/api/v1/policy/evaluate`
 
 ```json
@@ -160,18 +220,50 @@ block
 
 ### GET `/api/v1/sessions/:id`
 
+Retrieves session metadata and current evaluated risk state for an active or closed session.
+
+* **Authentication:** User JWT Bearer token (`Authorization: Bearer <token>`).
+* **Ownership:** A missing session and a session owned by another user both return `404 Not Found` with an identical error body to prevent session enumeration.
+* **Privacy:** Raw client IP, device fingerprint, geographic coordinates, and user IDs are never returned.
+* **Omissions:** `trusted_device` and `active_restrictions` are omitted from the MVP response (scheduled for Module 11 and Module 8).
+
+Example response (session with risk assessment):
+
 ```json
 {
   "session_id": "sess_98765",
-  "user_id": "usr_12345",
-  "current_risk_score": 68,
-  "risk_tier": "high",
-  "created_at": "2026-09-26T09:00:00Z",
-  "last_activity_at": "2026-09-26T14:32:00Z",
-  "trusted_device": false,
-  "active_restrictions": [
-    "high_impact_action_blocked"
-  ]
+  "created_at": "2026-09-26T09:00:00.000Z",
+  "expires_at": "2026-09-26T09:15:00.000Z",
+  "is_active": true,
+  "risk": {
+    "current_risk_score": 68,
+    "risk_tier": "high",
+    "contributing_signals": [
+      {
+        "signal": "base_action_login_success",
+        "category": "base_action",
+        "weight": 5
+      }
+    ],
+    "evaluated_at": "2026-09-26T09:00:00.000Z"
+  }
+}
+```
+
+Example response (session without risk assessment yet):
+
+```json
+{
+  "session_id": "sess_98765",
+  "created_at": "2026-09-26T09:00:00.000Z",
+  "expires_at": "2026-09-26T09:15:00.000Z",
+  "is_active": true,
+  "risk": {
+    "current_risk_score": null,
+    "risk_tier": null,
+    "contributing_signals": null,
+    "evaluated_at": null
+  }
 }
 ```
 
@@ -274,10 +366,12 @@ All errors follow a consistent structure:
 | ----------- | -------------------- | ----------------------------------------------- |
 | 400         | `invalid_request`    | Malformed or missing required fields            |
 | 400         | `invalid_event_type` | Event type is not recognized                    |
-| 401         | `unauthorized`       | Missing or invalid API key                      |
+| 401         | `unauthorized`       | Missing or invalid authentication token         |
+| 403         | `forbidden`          | Caller is not authorized for the requested user |
 | 404         | `not_found`          | Session or resource does not exist              |
-| 429         | `rate_limited`       | Too many requests from this API key             |
-| 500         | `internal_error`     | Unexpected failure in the Risk or Policy Engine |
+| 429         | `rate_limited`       | Too many requests from this caller              |
+| 500         | `internal_error`     | Unexpected server failure                       |
+| 503         | `risk_evaluation_failed` | Risk engine temporarily unavailable        |
 
 ### Fail-Safe Behavior
 

@@ -6,6 +6,7 @@ const initSecurityEventModel = require('./SecurityEvent');
 const initBehavioralBaselineModel = require('./BehavioralBaseline');
 const initActionSequenceModel = require('./ActionSequence');
 const initSequenceEventModel = require('./SequenceEvent');
+const initRiskAssessmentModel = require('./RiskAssessment');
 
 const User = initUserModel(sequelize);
 const Session = initSessionModel(sequelize);
@@ -14,6 +15,7 @@ const SecurityEvent = initSecurityEventModel(sequelize);
 const BehavioralBaseline = initBehavioralBaselineModel(sequelize);
 const ActionSequence = initActionSequenceModel(sequelize);
 const SequenceEvent = initSequenceEventModel(sequelize);
+const RiskAssessment = initRiskAssessmentModel(sequelize);
 
 // Associations
 User.hasMany(Session, {
@@ -121,6 +123,37 @@ SequenceEvent.belongsTo(SecurityEvent, {
   as: 'securityEvent'
 });
 
+// Module 6.3a: RiskAssessment Associations
+User.hasMany(RiskAssessment, {
+  foreignKey: 'user_id',
+  as: 'riskAssessments',
+  onDelete: 'CASCADE'
+});
+RiskAssessment.belongsTo(User, {
+  foreignKey: 'user_id',
+  as: 'user'
+});
+
+Session.hasMany(RiskAssessment, {
+  foreignKey: 'session_id',
+  as: 'riskAssessments',
+  onDelete: 'SET NULL'
+});
+RiskAssessment.belongsTo(Session, {
+  foreignKey: 'session_id',
+  as: 'session'
+});
+
+SecurityEvent.hasMany(RiskAssessment, {
+  foreignKey: 'event_id',
+  as: 'riskAssessments',
+  onDelete: 'SET NULL'
+});
+RiskAssessment.belongsTo(SecurityEvent, {
+  foreignKey: 'event_id',
+  as: 'securityEvent'
+});
+
 module.exports = {
   sequelize,
   User,
@@ -129,5 +162,7 @@ module.exports = {
   SecurityEvent,
   BehavioralBaseline,
   ActionSequence,
-  SequenceEvent
+  SequenceEvent,
+  RiskAssessment
 };
+

@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const { Session } = require('../database/models');
 const { storeSession, getSession, deleteSession, getSessionTTL } = require('../storage/redis');
+const eventBus = require('../events/eventBus');
 
 // Default session expiration in seconds (15 minutes)
 const DEFAULT_SESSION_TTL_SECONDS = parseInt(process.env.SESSION_TTL_SECONDS || '900', 10);
@@ -76,7 +77,16 @@ async function invalidateSession(sessionId) {
     { where: { id: sessionId } }
   );
 
-  return affectedRows > 0;
+  const isSuccess = affectedRows > 0;
+  if (isSuccess) {
+    eventBus.safeEmit('session:terminated', {
+      session_id: sessionId,
+      reason: 'session_invalidated',
+      terminated_at: new Date().toISOString()
+    });
+  }
+
+  return isSuccess;
 }
 
 /**

@@ -48,7 +48,7 @@ module.exports = (sequelize) => {
         }
       },
       added_at: {
-        type: DataTypes.DATE,
+        type: DataTypes.DATE(3),
         allowNull: false,
         defaultValue: DataTypes.NOW
       }

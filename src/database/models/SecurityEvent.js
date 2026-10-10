@@ -71,7 +71,7 @@ module.exports = (sequelize) => {
         }
       },
       timestamp: {
-        type: DataTypes.DATE,
+        type: DataTypes.DATE(3),
         allowNull: false,
         defaultValue: DataTypes.NOW,
         validate: {

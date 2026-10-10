@@ -36,7 +36,7 @@ module.exports = (sequelize) => {
         }
       },
       started_at: {
-        type: DataTypes.DATE,
+        type: DataTypes.DATE(3),
         allowNull: false,
         validate: {
           notNull: { msg: 'started_at is required' },
@@ -44,7 +44,7 @@ module.exports = (sequelize) => {
         }
       },
       last_event_at: {
-        type: DataTypes.DATE,
+        type: DataTypes.DATE(3),
         allowNull: false,
         validate: {
           notNull: { msg: 'last_event_at is required' },

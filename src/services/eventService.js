@@ -55,6 +55,26 @@ async function recordSecurityEvent(eventData = {}) {
   }
 
   const event = await SecurityEvent.create(payload);
+
+  // Module 6.3b: Pipeline hooks
+  if (event.user_id) {
+    // Hook (b): Correlate event into active sequence
+    try {
+      const { correlateEventIntoSequence } = require('./sequenceGroupingService');
+      await correlateEventIntoSequence(event);
+    } catch (err) {
+      console.warn('[EventPipeline] Sequence correlation failed:', err.message);
+    }
+
+    // Hook (c): Evaluate and persist risk assessment
+    try {
+      const { evaluateAndStoreRiskForEvent } = require('./riskEngineService');
+      await evaluateAndStoreRiskForEvent(event);
+    } catch (err) {
+      console.warn('[EventPipeline] Risk evaluation failed:', err.message);
+    }
+  }
+
   return event;
 }
 

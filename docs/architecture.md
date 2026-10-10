@@ -190,7 +190,7 @@ Users
     Action Sequences (correlated groups of events; active sequences cached in Redis via sequence:user:<userId>, full history persisted in MySQL)
           │
           ▼
-    Risk Scores (computed per event/session)
+    Risk Assessments (persisted risk scores, tiers, contributing signals, and explanations in risk_assessments table)
           │
           ▼
     Policy Decisions (allow / reverify / delay / block)

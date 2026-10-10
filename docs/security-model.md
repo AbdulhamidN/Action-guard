@@ -48,6 +48,10 @@ Detection draws on multiple signal categories — device fingerprinting, IP/geol
 
 Response scales with that risk rather than following a fixed rule: low risk is logged and allowed, moderate risk draws additional monitoring or a step-up verification, and high risk can delay or block a high-impact action while notifying the user. Every automated decision produces a plain-language explanation for the affected user and a more detailed, signal-level explanation for administrators — the goal is a system whose reasoning can always be inspected, not a black box that simply allows or denies.
 
+## 10. Known Limitations
+
+Any authenticated caller, including a hijacked session, can read its own risk breakdown and probe the advisory endpoint; the scoring rules are open source, so the exposure is probing volume rather than secrecy; mitigations are rate limiting on both endpoints (Module 11) and role-gating the full breakdown for administrators (Module 12). Additionally, administrative access to real-time telemetry currently relies on a static pre-shared key (ACTIONGUARD_ADMIN_API_KEY) that reads every user's security telemetry across the platform; fine-grained administrative roles and tenant segregation are not yet implemented.
+
 ## Summary
 
 ActionGuard's security model can be stated in one sentence: **trust is continuous, granular, and revocable, and the system's job is to detect and contain risky account activity before it becomes irreversible — not to guarantee that compromise never happens.** Every principle above exists in service of that one honest, testable claim.

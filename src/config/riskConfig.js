@@ -127,7 +127,13 @@ const rawConfig = {
       action_count: 4,
       window_seconds: 180
     }
-  }
+  },
+
+  // Housekeeping event types excluded from scoring / risk assessment creation
+  UNSCORED_EVENT_TYPES: [
+    'session_created',
+    'session_terminated'
+  ]
 };
 
 const riskConfig = deepFreeze(rawConfig);
