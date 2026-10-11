@@ -26,6 +26,29 @@ module.exports = (sequelize) => {
           notEmpty: true
         }
       },
+      recovery_email: {
+        type: DataTypes.STRING(255),
+        allowNull: true,
+        defaultValue: null,
+        validate: {
+          isEmail: true
+        }
+      },
+      phone_number: {
+        type: DataTypes.STRING(32),
+        allowNull: true,
+        defaultValue: null
+      },
+      mfa_enabled: {
+        type: DataTypes.BOOLEAN,
+        allowNull: false,
+        defaultValue: false
+      },
+      locked_until: {
+        type: DataTypes.DATE(3),
+        allowNull: true,
+        defaultValue: null
+      },
       created_at: {
         type: DataTypes.DATE,
         allowNull: false,

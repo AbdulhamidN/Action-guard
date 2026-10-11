@@ -7,6 +7,8 @@ const initBehavioralBaselineModel = require('./BehavioralBaseline');
 const initActionSequenceModel = require('./ActionSequence');
 const initSequenceEventModel = require('./SequenceEvent');
 const initRiskAssessmentModel = require('./RiskAssessment');
+const initPolicyDecisionModel = require('./PolicyDecision');
+const initElevationAuditLogModel = require('./ElevationAuditLog');
 
 const User = initUserModel(sequelize);
 const Session = initSessionModel(sequelize);
@@ -16,6 +18,8 @@ const BehavioralBaseline = initBehavioralBaselineModel(sequelize);
 const ActionSequence = initActionSequenceModel(sequelize);
 const SequenceEvent = initSequenceEventModel(sequelize);
 const RiskAssessment = initRiskAssessmentModel(sequelize);
+const PolicyDecision = initPolicyDecisionModel(sequelize);
+const ElevationAuditLog = initElevationAuditLogModel(sequelize);
 
 // Associations
 User.hasMany(Session, {
@@ -154,6 +158,67 @@ RiskAssessment.belongsTo(SecurityEvent, {
   as: 'securityEvent'
 });
 
+// Module 10b: PolicyDecision & ElevationAuditLog Associations
+User.hasMany(PolicyDecision, {
+  foreignKey: 'user_id',
+  as: 'policyDecisions',
+  onDelete: 'CASCADE'
+});
+PolicyDecision.belongsTo(User, {
+  foreignKey: 'user_id',
+  as: 'user'
+});
+
+Session.hasMany(PolicyDecision, {
+  foreignKey: 'session_id',
+  as: 'policyDecisions',
+  onDelete: 'SET NULL'
+});
+PolicyDecision.belongsTo(Session, {
+  foreignKey: 'session_id',
+  as: 'session'
+});
+
+SecurityEvent.hasMany(PolicyDecision, {
+  foreignKey: 'event_id',
+  as: 'policyDecisions',
+  onDelete: 'SET NULL'
+});
+PolicyDecision.belongsTo(SecurityEvent, {
+  foreignKey: 'event_id',
+  as: 'securityEvent'
+});
+
+RiskAssessment.hasMany(PolicyDecision, {
+  foreignKey: 'risk_assessment_id',
+  as: 'policyDecisions',
+  onDelete: 'SET NULL'
+});
+PolicyDecision.belongsTo(RiskAssessment, {
+  foreignKey: 'risk_assessment_id',
+  as: 'riskAssessment'
+});
+
+User.hasMany(ElevationAuditLog, {
+  foreignKey: 'user_id',
+  as: 'elevationAuditLogs',
+  onDelete: 'CASCADE'
+});
+ElevationAuditLog.belongsTo(User, {
+  foreignKey: 'user_id',
+  as: 'user'
+});
+
+Session.hasMany(ElevationAuditLog, {
+  foreignKey: 'session_id',
+  as: 'elevationAuditLogs',
+  onDelete: 'SET NULL'
+});
+ElevationAuditLog.belongsTo(Session, {
+  foreignKey: 'session_id',
+  as: 'session'
+});
+
 module.exports = {
   sequelize,
   User,
@@ -163,6 +228,7 @@ module.exports = {
   BehavioralBaseline,
   ActionSequence,
   SequenceEvent,
-  RiskAssessment
+  RiskAssessment,
+  PolicyDecision,
+  ElevationAuditLog
 };
-

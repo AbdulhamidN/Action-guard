@@ -383,7 +383,8 @@ async function loadActiveSequenceForUser(userId, currentEvent = null) {
     const plain = {
       event_id: evId,
       event_type: evType,
-      timestamp: evTimestamp.toISOString()
+      timestamp: evTimestamp.toISOString(),
+      action_status: evMetadata.action_status || null
     };
 
     if (evType === 'login_success') {
@@ -499,7 +500,7 @@ async function evaluateAndStoreRiskForEvent(event, options = {}) {
       return null;
     }
 
-    const evaluation = await evaluateRisk(event, options);
+    const evaluation = await module.exports.evaluateRisk(event, options);
     if (!evaluation || evaluation.status !== 'ok') {
       return null;
     }
@@ -530,6 +531,11 @@ async function evaluateAndStoreRiskForEvent(event, options = {}) {
       explanation: evaluation.explanation,
       evaluated_at: evaluatedAt
     });
+
+    if (sessionId && evaluation.risk_tier) {
+      const { revokeElevationsOnRiskIncrease } = require('./elevationService');
+      await revokeElevationsOnRiskIncrease(sessionId, evaluation.risk_tier);
+    }
 
     return record;
   } catch (err) {

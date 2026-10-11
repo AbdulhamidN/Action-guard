@@ -298,6 +298,134 @@ class InMemoryRedisClient {
       return deletedCount;
     }
 
+    if (script.includes('-- ATOMIC_VERIFY_STEP_UP_CHALLENGE')) {
+      const crypto = require('crypto');
+      const challengeKey = keys[0];
+      const nowMs = Number(argv[0]);
+      const expectedUserId = String(argv[1]);
+      const expectedSessionId = String(argv[2]);
+      const candidateHashesJson = argv[3];
+
+      const raw = this._getSync(challengeKey);
+      if (!raw) {
+        return [-1, 'CHALLENGE_EXPIRED_OR_NOT_FOUND', 0, 0, '', ''];
+      }
+
+      let challenge;
+      try {
+        challenge = JSON.parse(raw);
+      } catch {
+        this._delSync(challengeKey);
+        return [-1, 'CHALLENGE_EXPIRED_OR_NOT_FOUND', 0, 0, '', ''];
+      }
+
+      const expiresAtMs = Number(
+        challenge.expires_at_ms !== undefined
+          ? challenge.expires_at_ms
+          : new Date(challenge.expires_at).getTime()
+      );
+      if (!Number.isFinite(expiresAtMs) || nowMs >= expiresAtMs) {
+        this._delSync(challengeKey);
+        return [-1, 'CHALLENGE_EXPIRED_OR_NOT_FOUND', 0, 0, '', ''];
+      }
+
+      if (
+        String(challenge.user_id) !== expectedUserId ||
+        String(challenge.session_id) !== expectedSessionId
+      ) {
+        return [-2, 'CHALLENGE_BINDING_MISMATCH', 0, 0, String(challenge.scope || ''), ''];
+      }
+
+      const maxAttempts = Number(challenge.max_attempts) || 3;
+      const currentAttempts = Number(challenge.attempts) || 0;
+      if (currentAttempts >= maxAttempts) {
+        this._delSync(challengeKey);
+        return [
+          -3,
+          'CHALLENGE_MAX_ATTEMPTS_EXCEEDED',
+          currentAttempts,
+          maxAttempts,
+          String(challenge.scope || ''),
+          ''
+        ];
+      }
+
+      let candidateHashes;
+      try {
+        candidateHashes = JSON.parse(candidateHashesJson);
+      } catch {
+        return [-1, 'CHALLENGE_EXPIRED_OR_NOT_FOUND', 0, 0, '', ''];
+      }
+
+      const scope = String(challenge.scope || '');
+      const expectedHash = String(challenge.code_hash || '');
+      const candidateHash = String((candidateHashes && candidateHashes[scope]) || '');
+
+      let isMatch = false;
+      if (expectedHash.length > 0 && expectedHash.length === candidateHash.length) {
+        const expectedBuf = Buffer.from(expectedHash, 'hex');
+        const candidateBuf = Buffer.from(candidateHash, 'hex');
+        isMatch =
+          expectedBuf.length > 0 &&
+          expectedBuf.length === candidateBuf.length &&
+          crypto.timingSafeEqual(expectedBuf, candidateBuf);
+      }
+
+      if (isMatch) {
+        this._delSync(challengeKey);
+        return [1, 'VERIFIED', currentAttempts + 1, maxAttempts, scope, expectedHash];
+      }
+
+      const nextAttempts = currentAttempts + 1;
+      if (nextAttempts >= maxAttempts) {
+        this._delSync(challengeKey);
+      } else {
+        challenge.attempts = nextAttempts;
+        const remainingTtlSec = Math.max(1, Math.ceil((expiresAtMs - nowMs) / 1000));
+        this._setSync(challengeKey, JSON.stringify(challenge), 'EX', remainingTtlSec);
+      }
+
+      return [0, 'INVALID_CODE', nextAttempts, maxAttempts, scope, expectedHash];
+    }
+
+    if (script.includes('-- ATOMIC_REVOKE_ELEVATIONS_ON_RISK_INCREASE')) {
+      const indexKey = keys[0];
+      const elevationPrefix = argv[0];
+      const sessionId = argv[1];
+      const newRank = Number(argv[2]) || 0;
+      const tierRanks = { low: 0, medium: 1, high: 2, critical: 3 };
+
+      const scopes = this._smembersSync(indexKey);
+      const revokedList = [];
+
+      for (const scope of scopes) {
+        const elevationKey = `${elevationPrefix}${sessionId}:${scope}`;
+        const raw = this._getSync(elevationKey);
+        if (!raw) {
+          this._sremSync(indexKey, scope);
+          continue;
+        }
+
+        let data;
+        try {
+          data = JSON.parse(raw);
+        } catch {
+          continue;
+        }
+
+        const grantedTier = String((data && data.granted_at_risk_tier) || 'low');
+        const grantedRank = tierRanks[grantedTier] !== undefined ? tierRanks[grantedTier] : 0;
+
+        if (newRank > grantedRank) {
+          this._delSync(elevationKey);
+          this._sremSync(indexKey, scope);
+          revokedList.push(raw);
+        }
+      }
+
+      return revokedList;
+    }
+
     throw new Error('Unsupported Lua script in InMemoryRedisClient mock');
   }
 

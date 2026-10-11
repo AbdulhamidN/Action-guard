@@ -3,6 +3,7 @@
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const redisStorage = require('../storage/redis');
+const { ElevationAuditLog, RiskAssessment } = require('../database/models');
 const {
   DEFAULT_ELEVATION_DURATION_SECONDS,
   MAX_ELEVATION_DURATION_SECONDS,
@@ -16,22 +17,69 @@ const TEST_VERIFICATION_TICKET_SECRET =
 const ALLOWED_TICKET_ALGORITHMS = Object.freeze(['HS256', 'RS256', 'ES256']);
 const MAX_TICKET_CLOCK_SKEW_SECONDS = 5;
 
+const TIER_RANKS = Object.freeze({
+  low: 0,
+  medium: 1,
+  high: 2,
+  critical: 3
+});
+
+/**
+ * Best-effort persistence for elevation lifecycle audit events (granted, used, revoked, expired).
+ * Never blocks Redis revocation or session teardown if the database write fails,
+ * but explicitly logs an audit warning for operator visibility.
+ *
+ * @param {object} entry
+ * @returns {Promise<object|null>}
+ */
+async function recordElevationAudit(entry) {
+  try {
+    if (!entry || !entry.user_id || !entry.scope || !entry.event_action) {
+      return null;
+    }
+    return await ElevationAuditLog.create({
+      user_id: entry.user_id,
+      session_id: entry.session_id || null,
+      scope: entry.scope,
+      event_action: entry.event_action,
+      reason: entry.reason || null,
+      jti: entry.jti || null,
+      granted_at_risk_tier: entry.granted_at_risk_tier || null,
+      expires_at: entry.expires_at ? new Date(entry.expires_at) : null,
+      metadata: entry.metadata || null,
+      recorded_at: entry.recorded_at ? new Date(entry.recorded_at) : new Date()
+    });
+  } catch (err) {
+    console.warn('[ElevationAudit] Best-effort audit persistence failed:', err.message);
+    return null;
+  }
+}
+
 /**
  * Resolves and validates the cryptographic verification key and its strictly compatible
  * signing algorithms.
- * - When STEP_UP_VERIFICATION_PUBLIC_KEY is configured, parses it explicitly as an
- *   asymmetric public KeyObject and restricts algorithms to match the key type
+ * - When overridePublicKey or STEP_UP_VERIFICATION_PUBLIC_KEY is provided, parses it explicitly
+ *   as an asymmetric public KeyObject and restricts algorithms to match the key type
  *   (RS256 for RSA, ES256 for P-256 EC). Malformed or incompatible keys fail closed.
  * - HS256 symmetric secret verification is strictly restricted to NODE_ENV === 'test'
  *   when STEP_UP_VERIFICATION_PUBLIC_KEY is not configured.
  * - Never falls back to the general session JWT_SECRET.
+ *
+ * @param {string|object|null} [overridePublicKey=null]
  */
-function resolveVerificationKeyContext() {
-  const rawPublicKey = process.env.STEP_UP_VERIFICATION_PUBLIC_KEY;
-  if (rawPublicKey !== undefined && String(rawPublicKey).trim() !== '') {
+function resolveVerificationKeyContext(overridePublicKey = null) {
+  const rawPublicKey =
+    overridePublicKey !== null && overridePublicKey !== undefined
+      ? overridePublicKey
+      : process.env.STEP_UP_VERIFICATION_PUBLIC_KEY;
+
+  if (rawPublicKey !== undefined && rawPublicKey !== null && String(rawPublicKey).trim() !== '') {
     let pubKeyObj;
     try {
-      pubKeyObj = crypto.createPublicKey(rawPublicKey);
+      pubKeyObj =
+        typeof rawPublicKey === 'object' && rawPublicKey.type === 'public'
+          ? rawPublicKey
+          : crypto.createPublicKey(rawPublicKey);
     } catch {
       return {
         ok: false,
@@ -169,6 +217,7 @@ function createMockVerificationTicket({
  * @param {object} [options={}]
  * @param {number} [options.nowMs]
  * @param {number} [options.maxClockSkewSeconds=MAX_TICKET_CLOCK_SKEW_SECONDS]
+ * @param {string|object|null} [options.publicKey=null]
  * @returns {Promise<{ valid: boolean, jti?: string, error?: string, code?: string }>}
  */
 async function verifyVerificationTicket(
@@ -182,7 +231,7 @@ async function verifyVerificationTicket(
     return { valid: false, error: 'Verification ticket is required', code: 'INVALID_TICKET' };
   }
 
-  const keyCtx = resolveVerificationKeyContext();
+  const keyCtx = resolveVerificationKeyContext(options.publicKey || null);
   if (!keyCtx.ok) {
     return {
       valid: false,
@@ -289,10 +338,42 @@ async function verifyVerificationTicket(
 }
 
 /**
+ * Resolves the current risk tier for a session at grant time.
+ *
+ * @param {string} userId
+ * @param {string} sessionId
+ * @param {string|null} [explicitTier=null]
+ * @returns {Promise<'low'|'medium'|'high'|'critical'>}
+ */
+async function resolveGrantTimeRiskTier(userId, sessionId, explicitTier = null) {
+  if (explicitTier && TIER_RANKS[explicitTier] !== undefined) {
+    return explicitTier;
+  }
+  try {
+    const latest = await RiskAssessment.findOne({
+      where: {
+        user_id: userId,
+        session_id: sessionId
+      },
+      order: [
+        ['evaluated_at', 'DESC'],
+        ['id', 'DESC']
+      ]
+    });
+    if (latest && TIER_RANKS[latest.risk_tier] !== undefined) {
+      return latest.risk_tier;
+    }
+  } catch {
+    // Fallback to 'low' if DB lookup fails
+  }
+  return 'low';
+}
+
+/**
  * Grants temporary, scoped elevation for an active session.
  * Uses an atomic Lua script to verify parent session existence and lifetime,
  * claim the single-use ticket, update the session elevation Set index with a bounded TTL,
- * and store the elevation record.
+ * and store the elevation record (including granted_at_risk_tier).
  *
  * @param {object} params
  * @param {string} params.sessionId
@@ -302,7 +383,9 @@ async function verifyVerificationTicket(
  * @param {number} [params.durationSeconds]
  * @param {number} [params.maxSessionExpiresAt]
  * @param {number} [params.nowMs]
- * @returns {Promise<{ elevated: boolean, scope: string, expiresAt: string, remainingSeconds: number }>}
+ * @param {string|null} [params.grantedAtRiskTier]
+ * @param {string|object|null} [params.publicKey]
+ * @returns {Promise<{ elevated: boolean, scope: string, expiresAt: string, remainingSeconds: number, grantedAtRiskTier: string }>}
  */
 async function grantElevation({
   sessionId,
@@ -311,7 +394,9 @@ async function grantElevation({
   verificationTicket,
   durationSeconds = DEFAULT_ELEVATION_DURATION_SECONDS,
   maxSessionExpiresAt = null,
-  nowMs = Date.now()
+  nowMs = Date.now(),
+  grantedAtRiskTier = null,
+  publicKey = null
 }) {
   if (!sessionId || !userId || !scope) {
     const error = new Error('Session ID, user ID, and scope are required');
@@ -328,7 +413,8 @@ async function grantElevation({
 
   // 2. Ticket validation
   const ticketRes = await verifyVerificationTicket(verificationTicket, userId, sessionId, scope, {
-    nowMs
+    nowMs,
+    publicKey
   });
   if (!ticketRes.valid) {
     const error = new Error(ticketRes.error);
@@ -367,6 +453,8 @@ async function grantElevation({
     effectiveDurationSec = Math.min(effectiveDurationSec, remainingSessionSec);
   }
 
+  const effectiveRiskTier = await resolveGrantTimeRiskTier(userId, sessionId, grantedAtRiskTier);
+
   const expiresAtMs = nowMs + effectiveDurationSec * 1000;
   const expiresAtIso = new Date(expiresAtMs).toISOString();
 
@@ -379,6 +467,8 @@ async function grantElevation({
     session_id: sessionId,
     user_id: userId,
     scope,
+    jti: ticketRes.jti,
+    granted_at_risk_tier: effectiveRiskTier,
     granted_at: new Date(nowMs).toISOString(),
     expires_at: expiresAtIso
   });
@@ -415,27 +505,54 @@ async function grantElevation({
     throw error;
   }
 
+  await recordElevationAudit({
+    user_id: userId,
+    session_id: sessionId,
+    scope,
+    event_action: 'granted',
+    reason: 'step_up_verified',
+    jti: ticketRes.jti,
+    granted_at_risk_tier: effectiveRiskTier,
+    expires_at: new Date(expiresAtMs),
+    recorded_at: new Date(nowMs)
+  });
+
   return {
     elevated: true,
     scope,
     expiresAt: expiresAtIso,
-    remainingSeconds: effectiveDurationSec
+    remainingSeconds: effectiveDurationSec,
+    grantedAtRiskTier: effectiveRiskTier
   };
 }
 
 /**
  * Checks whether a specific scope is currently elevated for a session.
- * Strictly validates parent session active status, absolute lifetime, and ownership.
- * Fails closed (elevated: false) on any error or inconsistency.
+ * Strictly validates parent session active status, absolute lifetime, ownership,
+ * and optional risk-tier ceiling.
+ * Fails closed (elevated: false) on any error or inconsistency unless throwOnRedisError is set.
  *
  * @param {object} params
  * @param {string} params.sessionId
  * @param {string} params.scope
  * @param {object|null} [params.parentSession] - Optional parent session object
  * @param {number} [params.nowMs] - Optional current timestamp override for deterministic tests
- * @returns {Promise<{ elevated: boolean, scope: string, expiresAt: string|null, remainingSeconds: number }>}
+ * @param {string|null} [params.currentRiskTier] - Optional current risk tier to enforce ceiling
+ * @param {boolean} [params.recordUse=false] - Whether to record an elevation 'used' audit entry
+ * @param {string|null} [params.actionType=null] - Action type when recording 'used' audit entry
+ * @param {boolean} [params.throwOnRedisError=false] - Whether to rethrow unexpected Redis errors
+ * @returns {Promise<{ elevated: boolean, scope: string, expiresAt: string|null, remainingSeconds: number, grantedAtRiskTier?: string }>}
  */
-async function checkElevation({ sessionId, scope, parentSession = null, nowMs = Date.now() }) {
+async function checkElevation({
+  sessionId,
+  scope,
+  parentSession = null,
+  nowMs = Date.now(),
+  currentRiskTier = null,
+  recordUse = false,
+  actionType = null,
+  throwOnRedisError = false
+}) {
   if (!sessionId || !scope) {
     return { elevated: false, scope, expiresAt: null, remainingSeconds: 0 };
   }
@@ -488,37 +605,109 @@ async function checkElevation({ sessionId, scope, parentSession = null, nowMs = 
     if (!Number.isFinite(remainingMs) || remainingMs <= 0) {
       await client.del(elevationKey).catch(() => {});
       await client.srem(`${REDIS_PREFIXES.SESSION_ELEVATIONS_INDEX}${sessionId}`, scope).catch(() => {});
+      await recordElevationAudit({
+        user_id: data.user_id,
+        session_id: sessionId,
+        scope,
+        event_action: 'expired',
+        reason: 'ttl_elapsed',
+        jti: data.jti || null,
+        granted_at_risk_tier: data.granted_at_risk_tier || null,
+        expires_at: data.expires_at,
+        recorded_at: new Date(nowMs)
+      });
       return { elevated: false, scope, expiresAt: null, remainingSeconds: 0 };
+    }
+
+    // 4. Enforce risk-tier ceiling if currentRiskTier is provided
+    const grantedTier = data.granted_at_risk_tier || 'low';
+    if (
+      currentRiskTier &&
+      TIER_RANKS[currentRiskTier] !== undefined &&
+      TIER_RANKS[grantedTier] !== undefined &&
+      TIER_RANKS[currentRiskTier] > TIER_RANKS[grantedTier]
+    ) {
+      await revokeElevation(sessionId, scope, 'risk_tier_increased', data);
+      return { elevated: false, scope, expiresAt: null, remainingSeconds: 0 };
+    }
+
+    // 5. Record usage if requested by PEP
+    if (recordUse) {
+      await recordElevationAudit({
+        user_id: data.user_id,
+        session_id: sessionId,
+        scope,
+        event_action: 'used',
+        reason: actionType ? `reverify:${actionType}` : 'reverify_satisfied',
+        jti: data.jti || null,
+        granted_at_risk_tier: grantedTier,
+        expires_at: data.expires_at,
+        metadata: actionType ? { action_type: actionType } : null,
+        recorded_at: new Date(nowMs)
+      });
     }
 
     return {
       elevated: true,
       scope,
       expiresAt: data.expires_at,
-      remainingSeconds: Math.ceil(remainingMs / 1000)
+      remainingSeconds: Math.ceil(remainingMs / 1000),
+      grantedAtRiskTier: grantedTier
     };
   } catch (err) {
+    if (throwOnRedisError) {
+      throw err;
+    }
     // Fail-closed on Redis failure or parse error
     return { elevated: false, scope, expiresAt: null, remainingSeconds: 0 };
   }
 }
 
 /**
- * Revokes a single elevation scope for a session.
+ * Revokes a single elevation scope for a session and records a best-effort audit entry.
  *
  * @param {string} sessionId
  * @param {string} scope
+ * @param {string} [reason='manual_revocation']
+ * @param {object|null} [existingData=null]
  * @returns {Promise<boolean>}
  */
-async function revokeElevation(sessionId, scope) {
+async function revokeElevation(sessionId, scope, reason = 'manual_revocation', existingData = null) {
   if (!sessionId || !scope) return false;
   try {
     const client = redisStorage.getRedisClient();
     const elevationKey = `${REDIS_PREFIXES.ELEVATION}${sessionId}:${scope}`;
     const indexKey = `${REDIS_PREFIXES.SESSION_ELEVATIONS_INDEX}${sessionId}`;
-    await client.del(elevationKey);
+
+    let parsed = existingData;
+    if (!parsed) {
+      const raw = await client.get(elevationKey).catch(() => null);
+      if (raw) {
+        try {
+          parsed = JSON.parse(raw);
+        } catch {
+          parsed = null;
+        }
+      }
+    }
+
+    const delCount = await client.del(elevationKey);
     await client.srem(indexKey, scope);
-    return true;
+
+    if (parsed && parsed.user_id) {
+      await recordElevationAudit({
+        user_id: parsed.user_id,
+        session_id: sessionId,
+        scope,
+        event_action: 'revoked',
+        reason,
+        jti: parsed.jti || null,
+        granted_at_risk_tier: parsed.granted_at_risk_tier || null,
+        expires_at: parsed.expires_at || null
+      });
+    }
+
+    return delCount > 0 || Boolean(existingData);
   } catch {
     return false;
   }
@@ -526,19 +715,180 @@ async function revokeElevation(sessionId, scope) {
 
 /**
  * Revokes all elevation scopes for a specific session without wildcard scanning.
+ * Records best-effort audit entries for each revoked scope.
  *
  * @param {string} sessionId
+ * @param {string} [reason='session_invalidated']
+ * @param {object} [options={}]
+ * @param {boolean} [options.throwOnError=false]
  * @returns {Promise<number>} Number of revoked elevations
  */
-async function revokeAllElevationsForSession(sessionId) {
+async function revokeAllElevationsForSession(sessionId, reason = 'session_invalidated', options = {}) {
   if (!sessionId) return 0;
   try {
-    return await redisStorage.executeRevokeSessionElevations(
+    const client = redisStorage.getRedisClient();
+    const indexKey = `${REDIS_PREFIXES.SESSION_ELEVATIONS_INDEX}${sessionId}`;
+
+    // Best-effort read of active scopes prior to Lua purge for audit logging
+    const existingRecords = [];
+    try {
+      const scopes = await client.smembers(indexKey);
+      if (Array.isArray(scopes)) {
+        for (const scope of scopes) {
+          const raw = await client.get(`${REDIS_PREFIXES.ELEVATION}${sessionId}:${scope}`);
+          if (raw) {
+            try {
+              const parsed = JSON.parse(raw);
+              if (parsed && parsed.user_id) {
+                existingRecords.push({ scope, parsed });
+              }
+            } catch {
+              // Ignore malformed record
+            }
+          }
+        }
+      }
+    } catch {
+      // Do not block Lua revocation if pre-read fails
+    }
+
+    const deletedCount = await redisStorage.executeRevokeSessionElevations(
       sessionId,
       REDIS_PREFIXES.ELEVATION,
       REDIS_PREFIXES.SESSION_ELEVATIONS_INDEX
     );
-  } catch {
+
+    for (const item of existingRecords) {
+      await recordElevationAudit({
+        user_id: item.parsed.user_id,
+        session_id: sessionId,
+        scope: item.scope,
+        event_action: 'revoked',
+        reason,
+        jti: item.parsed.jti || null,
+        granted_at_risk_tier: item.parsed.granted_at_risk_tier || null,
+        expires_at: item.parsed.expires_at || null
+      });
+    }
+
+    return deletedCount;
+  } catch (err) {
+    if (options.throwOnError) {
+      throw err;
+    }
+    return 0;
+  }
+}
+
+const REVOKE_ELEVATIONS_ON_RISK_INCREASE_LUA = `
+-- ATOMIC_REVOKE_ELEVATIONS_ON_RISK_INCREASE
+-- KEYS[1]: session_elevations:<sessionId>
+-- ARGV[1]: elevationPrefix (elevation:session:)
+-- ARGV[2]: sessionId
+-- ARGV[3]: newRank (0=low, 1=medium, 2=high, 3=critical)
+
+local indexKey = KEYS[1]
+local elevationPrefix = ARGV[1]
+local sessionId = ARGV[2]
+local newRank = tonumber(ARGV[3]) or 0
+
+local tierRanks = {
+  low = 0,
+  medium = 1,
+  high = 2,
+  critical = 3
+}
+
+local scopes = redis.call('SMEMBERS', indexKey)
+local revokedList = {}
+
+for _, scope in ipairs(scopes) do
+  local elevationKey = elevationPrefix .. sessionId .. ':' .. scope
+  local raw = redis.call('GET', elevationKey)
+  if not raw then
+    redis.call('SREM', indexKey, scope)
+  else
+    local ok, data = pcall(cjson.decode, raw)
+    if ok and type(data) == 'table' then
+      local grantedTier = tostring(data.granted_at_risk_tier or 'low')
+      local grantedRank = tierRanks[grantedTier]
+      if grantedRank == nil then
+        grantedRank = 0
+      end
+      if newRank > grantedRank then
+        redis.call('DEL', elevationKey)
+        redis.call('SREM', indexKey, scope)
+        table.insert(revokedList, raw)
+      end
+    end
+  end
+end
+
+return revokedList
+`;
+
+/**
+ * Revokes any active elevations on a session whose recorded granted_at_risk_tier
+ * is strictly lower than newRiskTier using an atomic Redis Lua script.
+ * Handles Redis failures safely without throwing.
+ *
+ * @param {string} sessionId
+ * @param {'low'|'medium'|'high'|'critical'} newRiskTier
+ * @returns {Promise<number>} Number of revoked elevations
+ */
+async function revokeElevationsOnRiskIncrease(sessionId, newRiskTier) {
+  if (!sessionId || !newRiskTier || TIER_RANKS[newRiskTier] === undefined) {
+    return 0;
+  }
+
+  try {
+    const client = redisStorage.getRedisClient();
+    const indexKey = `${REDIS_PREFIXES.SESSION_ELEVATIONS_INDEX}${sessionId}`;
+    const newRank = TIER_RANKS[newRiskTier];
+
+    const revokedRawList = await client.eval(
+      REVOKE_ELEVATIONS_ON_RISK_INCREASE_LUA,
+      1,
+      indexKey,
+      REDIS_PREFIXES.ELEVATION,
+      String(sessionId),
+      String(newRank)
+    );
+
+    if (!Array.isArray(revokedRawList) || revokedRawList.length === 0) {
+      return 0;
+    }
+
+    for (const raw of revokedRawList) {
+      let data;
+      try {
+        data = JSON.parse(raw);
+      } catch {
+        continue;
+      }
+
+      if (data && data.user_id && data.scope) {
+        const grantedTier = data.granted_at_risk_tier || 'low';
+        await recordElevationAudit({
+          user_id: data.user_id,
+          session_id: sessionId,
+          scope: data.scope,
+          event_action: 'revoked',
+          reason: 'risk_tier_increased',
+          jti: data.jti || null,
+          granted_at_risk_tier: grantedTier,
+          expires_at: data.expires_at || null,
+          metadata: {
+            previous_tier: grantedTier,
+            new_tier: newRiskTier
+          }
+        });
+      }
+    }
+
+    return revokedRawList.length;
+  } catch (err) {
+    console.warn('[ElevationService] Failed to evaluate risk-tier elevation revocation:', err.message);
     return 0;
   }
 }
@@ -548,8 +898,11 @@ module.exports = {
   checkElevation,
   revokeElevation,
   revokeAllElevationsForSession,
+  revokeElevationsOnRiskIncrease,
+  recordElevationAudit,
   createMockVerificationTicket,
   verifyVerificationTicket,
   ALLOWLISTED_ELEVATION_SCOPES,
-  TEST_VERIFICATION_TICKET_SECRET
+  TEST_VERIFICATION_TICKET_SECRET,
+  TIER_RANKS
 };

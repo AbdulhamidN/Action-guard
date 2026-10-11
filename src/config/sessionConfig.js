@@ -50,6 +50,21 @@ function loadAndValidateSessionConfig(env = process.env) {
     60,
     'VERIFICATION_TICKET_TTL_SECONDS'
   );
+  const stepUpChallengeTtlSeconds = parsePositiveInt(
+    env.STEP_UP_CHALLENGE_TTL_SECONDS,
+    300,
+    'STEP_UP_CHALLENGE_TTL_SECONDS'
+  );
+  const stepUpMaxAttempts = parsePositiveInt(
+    env.STEP_UP_MAX_ATTEMPTS,
+    3,
+    'STEP_UP_MAX_ATTEMPTS'
+  );
+  const accountLockDurationSeconds = parsePositiveInt(
+    env.ACCOUNT_LOCK_DURATION_SECONDS,
+    900,
+    'ACCOUNT_LOCK_DURATION_SECONDS'
+  );
 
   if (idleTimeoutSeconds > maxSessionLifetimeSeconds) {
     throw new Error(
@@ -69,7 +84,10 @@ function loadAndValidateSessionConfig(env = process.env) {
     RENEWAL_THROTTLE_SECONDS: renewalThrottleSeconds,
     DEFAULT_ELEVATION_DURATION_SECONDS: defaultElevationDurationSeconds,
     MAX_ELEVATION_DURATION_SECONDS: maxElevationDurationSeconds,
-    VERIFICATION_TICKET_TTL_SECONDS: verificationTicketTtlSeconds
+    VERIFICATION_TICKET_TTL_SECONDS: verificationTicketTtlSeconds,
+    STEP_UP_CHALLENGE_TTL_SECONDS: stepUpChallengeTtlSeconds,
+    STEP_UP_MAX_ATTEMPTS: stepUpMaxAttempts,
+    ACCOUNT_LOCK_DURATION_SECONDS: accountLockDurationSeconds
   });
 }
 
@@ -84,12 +102,23 @@ const ALLOWLISTED_ELEVATION_SCOPES = Object.freeze([
   'admin_action'
 ]);
 
+// Canonical mapping of protected action types to required elevation scopes
+const ACTION_ELEVATION_SCOPE_MAP = Object.freeze({
+  password_change: 'credential_change',
+  mfa_change: 'credential_change',
+  recovery_email_change: 'account_recovery',
+  phone_number_change: 'account_recovery',
+  high_impact_action: 'sensitive_action'
+});
+
 // Redis Key Namespaces
 const REDIS_PREFIXES = Object.freeze({
   SESSION: 'session:',
   ELEVATION: 'elevation:session:',
   SESSION_ELEVATIONS_INDEX: 'session_elevations:',
-  TICKET_CLAIM: 'ticket_used:'
+  TICKET_CLAIM: 'ticket_used:',
+  STEP_UP_CHALLENGE: 'step_up_challenge:',
+  ACCOUNT_LOCK: 'account_lock:'
 });
 
 module.exports = {
@@ -99,7 +128,11 @@ module.exports = {
   DEFAULT_ELEVATION_DURATION_SECONDS: validated.DEFAULT_ELEVATION_DURATION_SECONDS,
   MAX_ELEVATION_DURATION_SECONDS: validated.MAX_ELEVATION_DURATION_SECONDS,
   VERIFICATION_TICKET_TTL_SECONDS: validated.VERIFICATION_TICKET_TTL_SECONDS,
+  STEP_UP_CHALLENGE_TTL_SECONDS: validated.STEP_UP_CHALLENGE_TTL_SECONDS,
+  STEP_UP_MAX_ATTEMPTS: validated.STEP_UP_MAX_ATTEMPTS,
+  ACCOUNT_LOCK_DURATION_SECONDS: validated.ACCOUNT_LOCK_DURATION_SECONDS,
   ALLOWLISTED_ELEVATION_SCOPES,
+  ACTION_ELEVATION_SCOPE_MAP,
   REDIS_PREFIXES,
   loadAndValidateSessionConfig
 };

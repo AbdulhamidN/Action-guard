@@ -112,15 +112,27 @@ Rather than introducing external policy engines such as Casbin, ABAC is implemen
 * **Deterministic Output Invariant:** The overall decision is strictly the maximum (strictest) decision among all fired reasons (`decision === max(reason.decision)`).
 * **Fail-Safe Mode:** When risk evaluation is temporarily unavailable, the engine applies fail-safe decisions based on action sensitivity (low/medium → `monitor`, high/critical → `block`), setting `requires_review: true`.
 * **Recommended Actions & Explanations:** Derives deterministic recommended actions (e.g., `require_step_up`, `delay_with_cancel`, `notify_user`, `admin_review`), `enforcement_mode` (`automatic` or `recommend_only`), user-facing explanations free of raw metrics or breach claims, and administrative reason traces.
-* **Separation of Concerns:** Module 8 decides only; it enforces nothing (enforcement middleware is in Module 10), persists no decisions (decision audit persistence in Module 10b), and delegates policy configuration to the versioned Policy-as-Code loader (`src/services/policyLoader.js`). Advisory decisions are exposed via `POST /api/v1/policy/evaluate`, which enforcement components must never trust as authorization truth.
+* **Separation of Concerns:** Module 8 decides only; it enforces nothing (enforcement middleware is in Module 10b), persists no decisions (decision audit persistence in Module 10b), and delegates policy configuration to the versioned Policy-as-Code loader (`src/services/policyLoader.js`). Advisory decisions are exposed via `POST /api/v1/policy/evaluate`, which enforcement components must never trust as authorization truth.
 
-### Policy Enforcement Point (PEP)
+### Policy Enforcement Point (PEP) & Containment
 
-Express middleware that calls the Policy Engine before a sensitive route executes, and applies its decision directly: allowing the request, triggering step-up verification (OTP via email), delaying execution with a cancel window, or blocking the action outright. On critical risk, can force session containment (logout / restrict further actions).
+Express middleware (`src/middleware/pep.js` — `enforce(actionType, options)`) that runs after `authenticateToken` and before any sensitive route handler (`src/routes/accountActions.js` mounted at `/api/v1/account`).
+* **Server-Side Context Extraction:** Uses `extractServerRequestContext(req)` (`src/utils/requestContext.js`) to extract IP, device fingerprint, user-agent, and geolocation strictly from server headers and socket state; client-supplied `context`, `timestamp`, and `action_sensitivity` in `req.body` are never trusted.
+* **Scoped Elevation & Decision Binding:** Maps `actionType` to its required elevation scope (`ACTION_ELEVATION_SCOPE_MAP`). Active scoped elevation can satisfy `reverify` (downgrading `effective_decision` to `allow`), but never bypasses `delay` or `block`.
+* **Mandatory Decision Audit & Fail-Closed Execution:** Persists a `PolicyDecision` row (`policy_decisions` table) stamped with the exact `policy_id` and `policy_version` from the active policy snapshot before calling `next()`. If policy evaluation, Redis elevation check, or `PolicyDecision.create` fails, the PEP fails closed with `503 policy_enforcement_unavailable` and never executes the route handler.
+* **Containment (`src/services/containmentService.js`):** When an action is blocked at `critical` risk tier (or via critical sequence escalation rules), the PEP invalidates the session (`critical_risk_containment`) and writes a 15-minute protective account lock to both Redis (`account_lock:<userId>`) and MySQL (`users.locked_until`), which `POST /api/v1/auth/login` enforces (`403 account_temporarily_locked`).
 
-### Session Security Module
+### Session Security & Local Step-Up Verification Module
 
-Manages session lifecycle in Redis: idle timeout, maximum session age, and automatic expiration of any elevated privilege granted through step-up verification.
+Manages session lifecycle and scoped privilege elevation in Redis (`src/services/sessionService.js`, `src/services/elevationService.js`, `src/services/stepUpService.js`):
+* **Session Lifecycle (Module 10a):** Sliding idle timeout (`900s` with `30s` write-throttle) and immutable maximum session age (`8h`) enforced via atomic Redis Lua scripts (`validateAndTouchSession`).
+* **Local Step-Up Provider (Module 10b):** Issues session- and scope-bound 6-digit OTP challenges (`POST /api/v1/sessions/:id/step-up/challenge`) stored as `SHA-256(challengeId + ':' + otp)` in Redis (`300s` TTL, max 3 attempts) and delivered to the immutable registration email (`User.email`). Verification (`POST /api/v1/sessions/:id/step-up/verify`) compares hashes in constant time, signs a short-lived (`60s`) `ES256` ticket using an asymmetric P-256 key pair (`STEP_UP_VERIFICATION_PRIVATE_KEY` / `STEP_UP_VERIFICATION_PUBLIC_KEY`, separate from `JWT_SECRET`), and redeems it via `grantElevation`.
+  * **ES256 Key Generation:**
+    ```bash
+    openssl ecparam -name prime256v1 -genkey -noout -out step-up-private.pem
+    openssl ec -in step-up-private.pem -pubout -out step-up-public.pem
+    ```
+* **Dynamic Elevation Revocation:** Elevations record `granted_at_risk_tier` upon grant and are automatically revoked when a newly persisted risk assessment exceeds that tier (`risk_tier_increased`), on logout (`logout`), on session invalidation (`session_invalidated`), or across all user sessions on password change (`password_change`).
 
 ### Policy Management (Policy-as-Code & Replay Testing)
 
@@ -134,15 +146,15 @@ A React/Tailwind frontend that displays current risk state, active sessions, the
 
 ### Audit & Event Storage
 
-MySQL holds all persistent state: users, sessions, events, action sequences, baselines, policy versions, and decisions — forming the audit trail used for both the dashboard and replay testing.
+MySQL holds all persistent state: users (including `recovery_email`, `phone_number`, `mfa_enabled`, `locked_until`), sessions, security events, action sequences, behavioral baselines, risk assessments (`risk_assessments`), policy decisions (`policy_decisions`), and elevation audit logs (`elevation_audit_logs`) — forming the audit trail used for both the dashboard and replay testing.
 
 ### In-Process Event Bus
 
-A centralized, synchronous EventEmitter wrapper (`src/events/eventBus.js`) that provides isolated event dispatching (`safeEmit`) across the application. When security events are committed and scored in the post-commit pipeline, the event bus emits `pipeline:event_processed` to decouple data ingestion and risk scoring from real-time streaming and third-party notifications, ensuring broadcaster errors cannot break request or event persistence flows.
+A centralized, synchronous EventEmitter wrapper (`src/events/eventBus.js`) that provides isolated event dispatching (`safeEmit`) across the application. When security events are committed and scored in the post-commit pipeline, the event bus emits `pipeline:event_processed`; when a PEP policy decision is persisted, it emits `policy:decision_recorded`, decoupling enforcement and risk scoring from real-time streaming and ensuring broadcaster errors cannot break request or persistence flows.
 
 ### Real-Time WebSocket Server (Socket.IO)
 
-A real-time push streaming server (`src/realtime/socketServer.js`) mounted on the shared HTTP server. It authenticates client handshakes using user JWT tokens or a constant-time verified `ADMIN_API_KEY` (minimum 32 characters, header/payload only). Clients are partitioned into isolated rooms (`user:<userId>` and `admin`). Sockets continuously revalidate session status against Redis, receive immediate `session:terminated` disconnect notifications upon logout or invalidation, and receive live sanitized broadcasts (`risk:updated`, `event:recorded`). End-user payloads are strictly tier-only and privacy-sanitized (no raw IP addresses, no hardware fingerprints, no GPS coordinates, no raw numeric risk scores); administrators receive full signal telemetry and score breakdowns.
+A real-time push streaming server (`src/realtime/socketServer.js`) mounted on the shared HTTP server. It authenticates client handshakes using user JWT tokens or a constant-time verified `ACTIONGUARD_ADMIN_API_KEY` (minimum 32 characters, header/payload only). Clients are partitioned into isolated rooms (`user:<userId>`, `session:<sessionId>`, and `admin:stream`). Sockets continuously revalidate session status against Redis, receive immediate `session:terminated` disconnect notifications upon logout, invalidation, or critical containment, and receive live sanitized broadcasts (`event:recorded`, `risk:updated`, `decision:recorded`). End-user payloads are strictly tier-only and privacy-sanitized (no raw IP addresses, no hardware fingerprints, no GPS coordinates, no raw numeric risk scores); administrators receive full signal telemetry, score breakdowns, and policy rule traces.
 
 **Not built in this MVP:** a third-party plugin loader/registry (Signal Collectors are hardcoded, not pluggable), and multi-tenant data isolation (no `tenant_id` boundary — this is a single-organization deployment).
 
@@ -313,7 +325,7 @@ Deployed via Docker Compose: one container for the Express application, one for 
 * The application runs as a single Express process; Risk Engine and Policy Engine do not currently scale independently of the enforcement layer.
 * Redis is used to keep session and sequence lookups fast under load.
 * Policy changes are read from versioned files at runtime, so updating thresholds does not require rebuilding the application.
-* Defined fail-safe/fail-secure behavior if the Risk Engine fails mid-request (e.g., defaulting to block for high-sensitivity actions) is a near-term addition, not yet built.
+* Defined fail-safe/fail-secure behavior is enforced across both the PDP and PEP: if the Risk Engine fails mid-request, high/critical actions default to `block` and low/medium actions default to `monitor` (`requires_review: true`); if policy evaluation, Redis elevation verification, or `policy_decisions` persistence fails, the PEP fails closed with `503 policy_enforcement_unavailable` before route execution.
 
 Independent service scaling, asynchronous/queued event processing at scale, and formalized failure-mode guarantees are documented as future architectural work, consistent with the requirements analysis.
 

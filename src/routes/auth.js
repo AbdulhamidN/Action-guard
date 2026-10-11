@@ -140,6 +140,34 @@ router.post('/login', async (req, res) => {
       return sendError(res, 401, 'authentication_failed', 'Invalid email or password');
     }
 
+    const { checkAccountLock } = require('../services/containmentService');
+    const lockStatus = await checkAccountLock(user, currentTimestamp);
+    if (lockStatus.locked) {
+      const loginContext = await extractLoginRequestContext(req, validFingerprint);
+      const lockedMetadata = {
+        reason: 'account_temporarily_locked',
+        locked_until: lockStatus.lockedUntil
+      };
+      if (botSignal) {
+        lockedMetadata.bot_detection = botSignal;
+      }
+      await recordSecurityEvent({
+        userId: user.id,
+        eventType: 'login_failed',
+        timestamp: currentTimestamp,
+        context: loginContext,
+        metadata: lockedMetadata
+      });
+      return res.status(403).json({
+        error: {
+          code: 'account_temporarily_locked',
+          message: 'Account is temporarily locked due to suspicious security activity. Please try again later.',
+          retry_after_seconds: lockStatus.remainingSeconds,
+          locked_until: lockStatus.lockedUntil
+        }
+      });
+    }
+
     const isMatch = await bcrypt.compare(password, user.password_hash);
     if (!isMatch) {
       const loginContext = await extractLoginRequestContext(req, validFingerprint);

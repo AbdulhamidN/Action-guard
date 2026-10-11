@@ -75,6 +75,13 @@ async function recordSecurityEvent(eventData = {}) {
       console.warn('[EventPipeline] Risk evaluation failed:', err.message);
     }
 
+    Object.defineProperty(event, '_assessment', {
+      value: assessmentRecord,
+      enumerable: false,
+      configurable: true,
+      writable: true
+    });
+
     // Module 7.2: Single emit point after correlation, scoring, and persistence
     try {
       const eventBus = require('../events/eventBus');

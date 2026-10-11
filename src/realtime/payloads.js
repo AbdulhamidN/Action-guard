@@ -251,8 +251,112 @@ function buildEventRecordedPayload(event, assessment = null, options = {}) {
   return payload;
 }
 
+/**
+ * Builds sanitized user-facing policy decision payload.
+ * Omits user_id, numeric risk_score, contributing_signals, policy_version, reasons, and admin_facing.
+ *
+ * @param {object} decisionRecord
+ * @returns {object}
+ */
+function buildUserDecisionPayload(decisionRecord) {
+  if (!decisionRecord || typeof decisionRecord !== 'object') {
+    throw new TypeError('decisionRecord is required to build user decision payload');
+  }
+
+  const decidedAt = decisionRecord.decided_at
+    ? decisionRecord.decided_at instanceof Date
+      ? decisionRecord.decided_at.toISOString()
+      : String(decisionRecord.decided_at)
+    : new Date().toISOString();
+
+  const userFacing =
+    decisionRecord.explanation && typeof decisionRecord.explanation.user_facing === 'string'
+      ? decisionRecord.explanation.user_facing
+      : '';
+
+  return {
+    decision_id: decisionRecord.id || decisionRecord.decision_id || null,
+    event_id: decisionRecord.event_id || null,
+    session_id: decisionRecord.session_id || null,
+    action_type: decisionRecord.action_type || null,
+    decision: decisionRecord.effective_decision || decisionRecord.decision || null,
+    enforcement_outcome: decisionRecord.enforcement_outcome || null,
+    risk_tier: decisionRecord.risk_tier || 'low',
+    decided_at: decidedAt,
+    explanation: {
+      user_facing: userFacing
+    }
+  };
+}
+
+/**
+ * Builds full admin-facing policy decision payload.
+ *
+ * @param {object} decisionRecord
+ * @returns {object}
+ */
+function buildAdminDecisionPayload(decisionRecord) {
+  if (!decisionRecord || typeof decisionRecord !== 'object') {
+    throw new TypeError('decisionRecord is required to build admin decision payload');
+  }
+
+  const decidedAt = decisionRecord.decided_at
+    ? decisionRecord.decided_at instanceof Date
+      ? decisionRecord.decided_at.toISOString()
+      : String(decisionRecord.decided_at)
+    : new Date().toISOString();
+
+  const userFacing =
+    decisionRecord.explanation && typeof decisionRecord.explanation.user_facing === 'string'
+      ? decisionRecord.explanation.user_facing
+      : '';
+
+  const adminFacing =
+    decisionRecord.explanation && typeof decisionRecord.explanation.admin_facing === 'string'
+      ? decisionRecord.explanation.admin_facing
+      : '';
+
+  const contributingSignals = Array.isArray(decisionRecord.contributing_signals)
+    ? decisionRecord.contributing_signals.map((s) => ({
+        signal: s && typeof s.signal === 'string' ? s.signal : '',
+        category: s && typeof s.category === 'string' ? s.category : '',
+        weight: s && typeof s.weight === 'number' ? s.weight : 0
+      }))
+    : [];
+
+  const reasons = Array.isArray(decisionRecord.reasons)
+    ? decisionRecord.reasons.map((r) => (typeof r === 'object' && r !== null ? { ...r } : r))
+    : [];
+
+  return {
+    decision_id: decisionRecord.id || decisionRecord.decision_id || null,
+    event_id: decisionRecord.event_id || null,
+    risk_assessment_id: decisionRecord.risk_assessment_id || null,
+    user_id: decisionRecord.user_id || null,
+    session_id: decisionRecord.session_id || null,
+    action_type: decisionRecord.action_type || null,
+    action_sensitivity: decisionRecord.action_sensitivity || null,
+    risk_score: typeof decisionRecord.risk_score === 'number' ? decisionRecord.risk_score : 0,
+    risk_tier: decisionRecord.risk_tier || 'low',
+    recommended_decision: decisionRecord.recommended_decision || null,
+    effective_decision: decisionRecord.effective_decision || null,
+    enforcement_outcome: decisionRecord.enforcement_outcome || null,
+    enforcement_mode: decisionRecord.enforcement_mode || 'automatic',
+    policy_version: decisionRecord.policy_version || null,
+    reasons,
+    contributing_signals: contributingSignals,
+    decided_at: decidedAt,
+    explanation: {
+      user_facing: userFacing,
+      admin_facing: adminFacing
+    }
+  };
+}
+
 module.exports = {
   buildUserRiskPayload,
   buildAdminRiskPayload,
-  buildEventRecordedPayload
+  buildEventRecordedPayload,
+  buildUserDecisionPayload,
+  buildAdminDecisionPayload
 };

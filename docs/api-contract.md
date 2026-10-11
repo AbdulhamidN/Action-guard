@@ -36,20 +36,28 @@ The API key identifies the calling application. It is distinct from the end user
 
 ## 3. Endpoints
 
-| Method | Path                      | Purpose                                                                      |
-| Method | Path                      | Purpose                                                                      |
-| ------ | ------------------------- | ---------------------------------------------------------------------------- |
-| POST   | `/api/v1/events`          | *(Planned - Module 11)* Submit a security event for logging and evaluation   |
-| POST   | `/api/v1/risk/evaluate`   | Request a risk score for a given user/session without submitting a new event |
-| POST   | `/api/v1/policy/evaluate` | Evaluate a proposed action against policy and receive an advisory decision   |
-| GET    | `/api/v1/sessions/:id`      | Retrieve current risk state and metadata for a session                       |
-| GET    | `/api/v1/events`            | Query historical events by user, session, or time range                      |
-| GET    | `/api/v1/sequences/current` | Retrieve current active sequence/timeline for the authenticated user         |
-| POST   | `/api/v1/webhooks`          | *(Planned - Module 11)* Register a webhook URL for decision/event alerts     |
+| Method | Path                                     | Purpose                                                                      |
+| ------ | ---------------------------------------- | ---------------------------------------------------------------------------- |
+| POST   | `/api/v1/events`                         | *(Planned - Module 11)* Submit a security event for logging and evaluation   |
+| POST   | `/api/v1/risk/evaluate`                  | Request a risk score for a given user/session without submitting a new event |
+| POST   | `/api/v1/policy/evaluate`                | Evaluate a proposed action against policy and receive an advisory decision   |
+| GET    | `/api/v1/sessions/:id`                   | Retrieve current risk state and metadata for a session                       |
+| POST   | `/api/v1/sessions/:id/step-up/challenge` | Issue a session- and scope-bound one-time step-up verification challenge     |
+| POST   | `/api/v1/sessions/:id/step-up/verify`    | Verify a step-up OTP code, mint an ES256 ticket, and grant scoped elevation  |
+| POST   | `/api/v1/sessions/:id/elevate`           | Exchange an externally issued step-up verification ticket for elevation      |
+| GET    | `/api/v1/sessions/:id/elevate/:scope`    | Inspect whether a session currently holds elevated trust for `:scope`        |
+| POST   | `/api/v1/account/password`               | Protected sensitive action: change account password (invalidates all sessions)|
+| POST   | `/api/v1/account/recovery-email`         | Protected sensitive action: update recovery email address                    |
+| POST   | `/api/v1/account/phone`                  | Protected sensitive action: update recovery phone number                     |
+| POST   | `/api/v1/account/mfa`                    | Protected sensitive action: update multi-factor authentication state         |
+| POST   | `/api/v1/account/high-impact`            | Protected sensitive action: execute a high-impact operation                  |
+| GET    | `/api/v1/events`                         | Query historical events by user, session, or time range                      |
+| GET    | `/api/v1/sequences/current`              | Retrieve current active sequence/timeline for the authenticated user         |
+| POST   | `/api/v1/webhooks`                       | *(Planned - Module 11)* Register a webhook URL for decision/event alerts     |
 
-In practice, `POST /events` is planned as a primary external integration point (Module 11). When implemented, submitting an event will trigger signal collection, risk scoring, and policy evaluation in one call and return a decision.
+In practice, `POST /events` is planned as a primary external integration point (Module 11). Internal protected routes (`/api/v1/account/*`) execute through the Policy Enforcement Point (`enforce(actionType)`) middleware, which evaluates live risk, enforces the active policy decision, records an immutable `policy_decisions` audit row, and broadcasts real-time notifications before any account state mutation occurs.
 
-`/risk/evaluate` and `/policy/evaluate` provide narrower operations for applications that want to check current risk or evaluate a hypothetical action without generating a new logged event.
+`/risk/evaluate` and `/policy/evaluate` provide narrower advisory operations for applications that want to check current risk or evaluate a hypothetical action without generating a new logged event.
 
 ## 4. Request Structure
 
@@ -343,7 +351,6 @@ Inspects whether the active session currently holds elevated trust for `:scope` 
 
 * **Authentication & Ownership:** User JWT Bearer token; `:id` must match the caller's active `session_id` (`403 Forbidden` otherwise).
 * **Expiration & Fail-Closed Behavior:** Validates parent session active status, ownership, and absolute lifetime before checking the scoped elevation key. When the elevation TTL expires, the session automatically reverts to baseline trust (`elevated: false`) without terminating the base session. Any Redis failure or state inconsistency fails closed (`elevated: false`).
-* **Note on Enforcement Boundary:** The `requireElevation(scope)` middleware helper is provided in `src/middleware/auth.js`, and route-level Policy Enforcement Point (PEP) attachment is scheduled for Module 10b.
 
 Response (`200 OK`):
 
@@ -355,6 +362,98 @@ Response (`200 OK`):
   "remainingSeconds": 245
 }
 ```
+
+### POST `/api/v1/sessions/:id/step-up/challenge`
+
+Issues a single-use, session- and scope-bound one-time verification challenge (Module 10b).
+
+* **Authentication & Ownership:** User JWT Bearer token; `:id` must match the caller's active `session_id` (`403 Forbidden` otherwise).
+* **Delivery & Privacy:** Delivers the 6-digit OTP to the immutable registration email (`User.email`, never `recovery_email`) and returns a masked address (`masked_destination`). Raw OTP codes are never returned in HTTP responses or written to logs.
+* **Challenge Storage:** Stored in Redis under `step_up_challenge:<challengeId>` with a 300-second TTL (`STEP_UP_CHALLENGE_TTL_SECONDS`) and a maximum of 3 verification attempts (`STEP_UP_MAX_ATTEMPTS`). Only the salted HMAC-SHA256 digest bound to `challengeId`, `sessionId`, `scope`, and `code` is persisted.
+
+Request body:
+
+```json
+{
+  "scope": "credential_change"
+}
+```
+
+Response (`200 OK`):
+
+```json
+{
+  "challenge_id": "chl_d290f1ee-6c54-4b01-90e6-d701748f0851",
+  "scope": "credential_change",
+  "delivery_channel": "registration_email",
+  "masked_destination": "a***@example.com",
+  "expires_at": "2026-10-10T10:05:00.000Z",
+  "ttl_seconds": 300
+}
+```
+
+### POST `/api/v1/sessions/:id/step-up/verify`
+
+Verifies a one-time challenge code atomically via Redis Lua and in constant time (`crypto.timingSafeEqual`), signs a short-lived (`60s`) ES256 verification ticket server-side, and redeems it through `grantElevation` (Module 10b).
+
+* **Authentication & Ownership:** User JWT Bearer token; `:id` must match the caller's active `session_id` (`403 Forbidden` otherwise).
+* **Key Isolation & Production Validation:** Signs the ticket using an asymmetric P-256 EC (`ES256`) key pair (`STEP_UP_VERIFICATION_PRIVATE_KEY` and `STEP_UP_VERIFICATION_PUBLIC_KEY`), separate from `JWT_SECRET`. In `NODE_ENV=production`, missing or mismatched keys fail closed with `501 verification_provider_unavailable`.
+* **Side Effects:** On valid code, atomically deletes the challenge key inside Redis Lua (single-use), records a `verification_success` security event (reducing subsequent session risk via Module 6's session-scoped verification confidence discount), grants scoped elevation in Redis (recording `granted_at_risk_tier`), and writes an `elevation_audit_logs` grant entry. On invalid code, atomically increments `attempts` (invalidating the challenge on the 3rd failed attempt), records a `verification_failed` security event, and triggers session containment + a 15-minute protective account lock (`403 session_contained`) upon reaching 3 failed attempts in the session.
+
+Request body:
+
+```json
+{
+  "challenge_id": "chl_d290f1ee-6c54-4b01-90e6-d701748f0851",
+  "code": "123456",
+  "duration_seconds": 300
+}
+```
+
+Response (`200 OK`):
+
+```json
+{
+  "elevated": true,
+  "scope": "credential_change",
+  "expiresAt": "2026-10-10T10:05:00.000Z",
+  "remainingSeconds": 300
+}
+```
+
+Error responses:
+* `400 Bad Request` (`invalid_request`): Missing `challenge_id` or malformed 6-digit `code`.
+* `401 Unauthorized` (`verification_failed`): Incorrect OTP (`remaining_attempts` returned).
+* `401 Unauthorized` (`challenge_expired`): Challenge expired, does not exist, or was already consumed.
+* `403 Forbidden` (`challenge_mismatch` / `forbidden`): Challenge does not belong to the caller's active session.
+* `403 Forbidden` (`session_contained`): 3rd failed verification attempt triggered session containment and a 15-minute protective account lock (`session_contained: true`, `account_locked: true`, `locked_until`, `retry_after_seconds`).
+* `501 Not Implemented` (`verification_provider_unavailable`): Step-up ES256 keys missing or invalid in production.
+
+### Protected Sensitive Account Routes (`/api/v1/account/*`)
+
+All five sensitive account routes run `authenticateToken` followed by `enforce(actionType)` before executing any account state mutation (Module 10b):
+
+| Route | Event Type | Route Sensitivity | Required Elevation Scope | Pre-Event Schema & Handler Validation / Mutation on Allow or Monitor |
+|---|---|---|---|---|
+| `POST /api/v1/account/password` | `password_change` | `high` | `credential_change` | Pre-validates `current_password` and `new_password` (min 8 chars, distinct from `current_password`) before recording an event. Handler verifies `current_password` (marking `action_status: 'rejected'` on mismatch), hashes `new_password`, updates `users.password_hash`, calls `terminateAllUserSessions(userId, 'password_change', { throwOnError: true })` to revoke all sessions and elevations across all devices (`reauthentication_required: true`), and transitions `action_status` to `'completed'`. |
+| `POST /api/v1/account/recovery-email` | `recovery_email_change` | `high` | `account_recovery` | Pre-validates `recovery_email` syntax before recording an event. Handler verifies `recovery_email` is distinct from primary registration `email` (marking `action_status: 'rejected'` if identical), updates `users.recovery_email`, and transitions `action_status` to `'completed'`. |
+| `POST /api/v1/account/phone` | `phone_number_change` | `medium` | `account_recovery` | Pre-validates strict E.164 `phone_number` (`/^\+[1-9]\d{6,14}$/`) before recording an event, updates `users.phone_number`, and transitions `action_status` to `'completed'`. |
+| `POST /api/v1/account/mfa` | `mfa_change` | `high` | `credential_change` | Pre-validates boolean `mfa_enabled` before recording an event, updates `users.mfa_enabled`, and transitions `action_status` to `'completed'`. |
+| `POST /api/v1/account/high-impact` | `high_impact_action` | `critical` | `sensitive_action` | Pre-validates non-empty `operation` (1–128 chars, plus optional `target`) before recording an event, executes protected operation, and transitions `action_status` to `'completed'`. |
+
+* **Server-Side Context & Sensitivity Enforcement:** Request context (`ip_address`, `device_fingerprint`, `user_agent`, `geo_country`, `geo_region`) is extracted strictly from server headers/connection state via `extractServerRequestContext(req)`. Any `context`, `timestamp`, or `action_sensitivity` fields in `req.body` or `req.query` are ignored by the PEP.
+* **Action Lifecycle States (`security_events.metadata.action_status`):**
+  * `attempted`: Recorded when the event is initially created in the PEP.
+  * `halted`: Recorded when the PEP halts the request (`reverify`, `delay`, or `block`).
+  * `authorized`: Recorded when the PEP permits execution (`allow`, `monitor`, `elevated_allowed`, `recommend_only_allowed`) before invoking `next()`.
+  * `rejected`: Recorded when post-PEP credential or domain validation fails (e.g. incorrect `current_password` or `recovery_email` matching primary `email`).
+  * `failed_execution`: Recorded when a downstream database mutation or session invalidation throws an exception.
+  * `completed`: Recorded **only** after the route handler's database mutation (and post-mutation session invalidation) has succeeded.
+* **Mandatory Decision Audit & Truthful Containment:** Every PEP evaluation persists a row in `policy_decisions` (stamped with `policy_version: "<policy_id>@<schema_version>"`) **before** calling `next()`. For qualifying critical `block` decisions, `containSessionAndLockAccount` executes before finalizing `enforcement_outcome: 'contained_and_blocked'` or emitting `decision:recorded`; if decision persistence, policy evaluation, Redis elevation verification, or containment fails, the PEP fails closed with `503 policy_enforcement_unavailable` and never falsely reports `session_contained: true`.
+* **PEP Halted Responses:**
+  * `reverify` (without active scoped elevation) $\rightarrow$ `403 Forbidden` (`error.code: "step_up_required"`, `decision: "reverify"`, `decision_id`, `required_scope`, `risk_tier`, `challenge_endpoint`, `verify_endpoint`, `elevate_endpoint`, `explanation`).
+  * `delay` (even if elevated) $\rightarrow$ `403 Forbidden` (`error.code: "action_delayed"`, `decision: "delay"`, `decision_id`, `risk_tier`, `retry_after_seconds`, `explanation`).
+  * `block` (even if elevated) $\rightarrow$ `403 Forbidden` (`error.code: "action_blocked"`, `decision: "block"`, `decision_id`, `risk_tier`, `session_contained`, `account_locked`, optional `locked_until` and `retry_after_seconds`, `explanation`).
 
 ### GET `/api/v1/events`
 
@@ -451,28 +550,35 @@ All errors follow a consistent structure:
 
 ### Common Error Codes
 
-| HTTP Status | Code                 | Meaning                                         |
-| ----------- | -------------------- | ----------------------------------------------- |
-| 400         | `invalid_request`    | Malformed or missing required fields            |
-| 400         | `invalid_event_type` | Event type is not recognized                    |
-| 401         | `unauthorized`       | Missing or invalid authentication token         |
-| 403         | `forbidden`          | Caller is not authorized for the requested user |
-| 404         | `not_found`          | Session or resource does not exist              |
-| 429         | `rate_limited`       | Too many requests from this caller              |
-| 500         | `internal_error`     | Unexpected server failure                       |
-| 503         | `risk_evaluation_failed` | Risk engine temporarily unavailable        |
+| HTTP Status | Code                             | Meaning                                                          |
+| ----------- | -------------------------------- | ---------------------------------------------------------------- |
+| 400         | `invalid_request`                | Malformed or missing required fields                             |
+| 400         | `invalid_event_type`             | Event type is not recognized                                     |
+| 400         | `INVALID_SCOPE` / `invalid_scope`| Requested elevation scope is not in the allowlist                |
+| 401         | `unauthorized`                   | Missing or invalid authentication token                          |
+| 401         | `invalid_otp`                    | Incorrect step-up verification code                              |
+| 401         | `invalid_current_password`       | Provided current password did not match during password change   |
+| 403         | `forbidden` / `FORBIDDEN`        | Caller is not authorized for the requested user or session       |
+| 403         | `step_up_required`               | Policy requires step-up verification for the requested action    |
+| 403         | `action_blocked`                 | Policy blocked the requested action due to elevated/critical risk|
+| 403         | `account_temporarily_locked`     | Login rejected while 15-minute protective account lock is active |
+| 404         | `not_found`                      | Session or resource does not exist                               |
+| 410         | `challenge_expired_or_not_found` | Step-up challenge does not exist, expired, or was already used   |
+| 429         | `challenge_max_attempts_exceeded`| Step-up challenge exceeded maximum verification attempts (3)     |
+| 429         | `rate_limited`                   | Too many requests from this caller                               |
+| 202         | `action_delayed`                 | Action halted for cooling-off period (`cooling_off_seconds`)     |
+| 500         | `internal_error`                 | Unexpected server failure                                        |
+| 501         | `VERIFICATION_PROVIDER_UNAVAILABLE` | Step-up verification keys not configured in production        |
+| 503         | `risk_evaluation_failed`         | Risk engine temporarily unavailable                              |
+| 503         | `policy_enforcement_unavailable` | PEP failed closed due to policy, Redis, or audit persistence error|
 
 ### Fail-Safe Behavior
 
 If the Risk Engine cannot compute a score because of an internal error:
 
-* High or critical actions should return `block`.
-* Low or medium actions should return `monitor`.
-* The response should indicate the internal failure with an appropriate error status.
-
-This behavior represents ActionGuard failing closed on sensitive actions rather than silently allowing them.
-
-**Note:** This fail-safe behavior is a near-term addition and may not be fully implemented in early MVP builds.
+* High or critical actions return `block` (`requires_review: true`).
+* Low or medium actions return `monitor` (`requires_review: true`).
+* If the Policy Engine, Redis elevation check, or `policy_decisions` audit insert fails during PEP enforcement, the PEP fails closed with `503 policy_enforcement_unavailable` and halts the request before the route handler runs.
 
 ## 7. Security-Event Format
 
@@ -608,10 +714,11 @@ Rooms are strictly server-managed. Clients cannot join or leave rooms; any clien
 
 ### 11.4 Event Delivery & Ordering Invariant
 
-When an event is processed by ActionGuard, notifications are broadcast to relevant rooms in a strict two-stage sequence:
+When an event is processed by ActionGuard, notifications are broadcast to relevant rooms in a strict sequence:
 
 1. `event:recorded` is emitted **first**.
 2. `risk:updated` is emitted **second** (only if the event was scored and an assessment was produced; unscored or failed events emit only `event:recorded`).
+3. `decision:recorded` is emitted when a Policy Enforcement Point (PEP) decision is durably persisted in `policy_decisions` (`policy:decision_recorded` on the in-process event bus).
 
 ### 11.5 Broadcast Payloads
 
@@ -698,6 +805,67 @@ Broadcast to `admin:stream`:
   "explanation": {
     "user_facing": "Elevated risk pattern observed across multiple security indicators.",
     "admin_facing": "Action sequence triggered rapid credential cascade."
+  }
+}
+```
+
+#### User `decision:recorded` Payload
+Broadcast to `user:<userId>` (privacy-sanitized tier-only format):
+
+```json
+{
+  "decision_id": "dec_98765",
+  "event_id": "evt_12345",
+  "session_id": "sess_98765",
+  "action_type": "password_change",
+  "decision": "reverify",
+  "enforcement_outcome": "reverify_required",
+  "risk_tier": "high",
+  "decided_at": "2026-10-10T09:00:00.000Z",
+  "explanation": {
+    "user_facing": "Additional verification is required before completing this sensitive action."
+  }
+}
+```
+* Contains no numeric `risk_score`, `contributing_signals`, `reasons`, `policy_version`, `user_id`, or `admin_facing` explanation.
+
+#### Admin `decision:recorded` Payload
+Broadcast to `admin:stream`:
+
+```json
+{
+  "decision_id": "dec_98765",
+  "event_id": "evt_12345",
+  "risk_assessment_id": "ass_54321",
+  "user_id": "usr_12345",
+  "session_id": "sess_98765",
+  "action_type": "password_change",
+  "action_sensitivity": "critical",
+  "risk_score": 68,
+  "risk_tier": "high",
+  "recommended_decision": "reverify",
+  "effective_decision": "reverify",
+  "enforcement_outcome": "reverify_required",
+  "enforcement_mode": "automatic",
+  "policy_version": "default-v1@1.0.0",
+  "reasons": [
+    {
+      "source": "base_matrix",
+      "rule_id": "base_matrix.high.critical",
+      "decision": "delay"
+    }
+  ],
+  "contributing_signals": [
+    {
+      "signal": "base_action_password_change",
+      "category": "action",
+      "weight": 20
+    }
+  ],
+  "decided_at": "2026-10-10T09:00:00.000Z",
+  "explanation": {
+    "user_facing": "Additional verification is required before completing this sensitive action.",
+    "admin_facing": "Policy decision detail..."
   }
 }
 ```

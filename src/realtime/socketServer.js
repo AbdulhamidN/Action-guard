@@ -6,13 +6,16 @@ const sessionService = require('../services/sessionService');
 const {
   buildUserRiskPayload,
   buildAdminRiskPayload,
-  buildEventRecordedPayload
+  buildEventRecordedPayload,
+  buildUserDecisionPayload,
+  buildAdminDecisionPayload
 } = require('./payloads');
 
 let ioInstance = null;
 let revalidationInterval = null;
 let unsubSessionTerminated = null;
 let unsubPipelineProcessed = null;
+let unsubPolicyDecision = null;
 
 /**
  * Initializes the Socket.IO server mounted on an HTTP server.
@@ -192,6 +195,10 @@ function initSocketServer(httpServer, options = {}) {
     unsubPipelineProcessed();
     unsubPipelineProcessed = null;
   }
+  if (typeof unsubPolicyDecision === 'function') {
+    unsubPolicyDecision();
+    unsubPolicyDecision = null;
+  }
 
   // 1. Subscribe to session:terminated event for immediate room disconnection
   const onSessionTerminated = (payload) => {
@@ -258,6 +265,36 @@ function initSocketServer(httpServer, options = {}) {
   };
   unsubPipelineProcessed = eventBus.on('pipeline:event_processed', onPipelineEventProcessed);
 
+  // 3. Subscribe to policy:decision_recorded for real-time PEP decision broadcasts
+  const onPolicyDecisionRecorded = (data) => {
+    try {
+      if (!ioInstance || !data || !data.decision) return;
+      const { decision } = data;
+      const userId = decision.user_id || decision.userId;
+      if (!userId) return;
+
+      const userRoom = `user:${userId}`;
+      const adminRoom = 'admin:stream';
+
+      try {
+        const userDecisionPayload = buildUserDecisionPayload(decision);
+        ioInstance.to(userRoom).emit('decision:recorded', userDecisionPayload);
+      } catch (err) {
+        console.warn('[SocketServer] Error broadcasting user decision:recorded:', err.message);
+      }
+
+      try {
+        const adminDecisionPayload = buildAdminDecisionPayload(decision);
+        ioInstance.to(adminRoom).emit('decision:recorded', adminDecisionPayload);
+      } catch (err) {
+        console.warn('[SocketServer] Error broadcasting admin decision:recorded:', err.message);
+      }
+    } catch (err) {
+      console.warn('[SocketServer] Error handling policy:decision_recorded:', err.message);
+    }
+  };
+  unsubPolicyDecision = eventBus.on('policy:decision_recorded', onPolicyDecisionRecorded);
+
   ioInstance = io;
   return io;
 }
@@ -291,6 +328,11 @@ async function closeSocketServer() {
   if (typeof unsubPipelineProcessed === 'function') {
     unsubPipelineProcessed();
     unsubPipelineProcessed = null;
+  }
+
+  if (typeof unsubPolicyDecision === 'function') {
+    unsubPolicyDecision();
+    unsubPolicyDecision = null;
   }
 
   if (!ioInstance) {

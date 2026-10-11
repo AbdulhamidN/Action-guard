@@ -169,11 +169,11 @@ async function validateActiveSession(sessionId, options = {}) {
  * @param {string} [reason='session_invalidated']
  * @returns {Promise<boolean>}
  */
-async function invalidateSession(sessionId, reason = 'session_invalidated') {
+async function invalidateSession(sessionId, reason = 'session_invalidated', options = {}) {
   if (!sessionId) return false;
 
   // 1. Purge all elevation scopes for this session
-  await revokeAllElevationsForSession(sessionId);
+  await revokeAllElevationsForSession(sessionId, reason, options);
 
   // 2. Remove/invalidate active session in Redis
   await redisStorage.deleteSession(sessionId);
@@ -184,8 +184,17 @@ async function invalidateSession(sessionId, reason = 'session_invalidated') {
     { where: { id: sessionId } }
   );
 
-  const isSuccess = affectedRows > 0;
-  if (isSuccess) {
+  let isSuccess = affectedRows > 0;
+  if (!isSuccess) {
+    const existing = await Session.findByPk(sessionId, {
+      attributes: ['id', 'is_active']
+    });
+    if (existing && existing.is_active === false) {
+      isSuccess = true;
+    }
+  }
+
+  if (affectedRows > 0) {
     eventBus.safeEmit('session:terminated', {
       session_id: sessionId,
       reason,
@@ -202,9 +211,10 @@ async function invalidateSession(sessionId, reason = 'session_invalidated') {
  *
  * @param {string} userId
  * @param {string} [reason='user_sessions_terminated']
+ * @param {object} [options={}]
  * @returns {Promise<{ terminatedCount: number }>}
  */
-async function terminateAllUserSessions(userId, reason = 'user_sessions_terminated') {
+async function terminateAllUserSessions(userId, reason = 'user_sessions_terminated', options = {}) {
   if (!userId) return { terminatedCount: 0 };
 
   const sessions = await Session.findAll({
@@ -217,8 +227,15 @@ async function terminateAllUserSessions(userId, reason = 'user_sessions_terminat
 
   let count = 0;
   for (const s of sessions) {
-    await invalidateSession(s.id, reason);
-    count++;
+    const ok = await invalidateSession(s.id, reason, options);
+    if (!ok && options.throwOnError) {
+      const err = new Error(`Failed to invalidate session '${s.id}' during bulk session termination`);
+      err.code = 'SESSION_INVALIDATION_FAILED';
+      throw err;
+    }
+    if (ok) {
+      count++;
+    }
   }
 
   // Ensure any orphaned sessions in MySQL are marked inactive
