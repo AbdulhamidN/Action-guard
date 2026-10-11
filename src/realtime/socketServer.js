@@ -162,7 +162,7 @@ function initSocketServer(httpServer, options = {}) {
       for (const s of sockets) {
         if (s.data && !s.data.isAdmin && s.data.user && s.data.user.session_id) {
           try {
-            const activeSession = await sessionService.validateActiveSession(s.data.user.session_id);
+            const activeSession = await sessionService.validateActiveSession(s.data.user.session_id, { touch: false });
             if (!activeSession) {
               s.disconnect(true);
             }

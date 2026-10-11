@@ -9,6 +9,7 @@ const {
   invalidateSession,
   DEFAULT_SESSION_TTL_SECONDS
 } = require('../services/sessionService');
+const { MAX_SESSION_LIFETIME_SECONDS } = require('../config/sessionConfig');
 const { recordSecurityEvent } = require('../services/eventService');
 const {
   validateDeviceFingerprint,
@@ -21,7 +22,7 @@ const { collectBotSignal } = require('../collectors/botCollector');
 const { collectBaselineDeviationSignal } = require('../collectors/baselineCollector');
 
 const router = express.Router();
-const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || `${DEFAULT_SESSION_TTL_SECONDS}s`;
+const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || `${MAX_SESSION_LIFETIME_SECONDS}s`;
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 

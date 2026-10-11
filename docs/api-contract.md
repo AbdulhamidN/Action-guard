@@ -283,7 +283,7 @@ Example response (session without risk assessment yet):
 {
   "session_id": "sess_98765",
   "created_at": "2026-09-26T09:00:00.000Z",
-  "expires_at": "2026-09-26T09:15:00.000Z",
+  "expires_at": "2026-09-26T17:00:00.000Z",
   "is_active": true,
   "risk": {
     "current_risk_score": null,
@@ -291,6 +291,68 @@ Example response (session without risk assessment yet):
     "contributing_signals": null,
     "evaluated_at": null
   }
+}
+```
+
+### POST `/api/v1/sessions/:id/elevate`
+
+Requests temporary, scoped privilege elevation for the caller's active session following step-up verification (Module 10a).
+
+* **Authentication:** User JWT Bearer token (`Authorization: Bearer <token>`).
+* **Session Ownership:** `:id` must match the caller's active `session_id`; attempts to elevate another session return `403 Forbidden`.
+* **Verification Ticket Requirements:**
+  * Must be a cryptographically signed single-use ticket verified against the configured step-up verification public key (`STEP_UP_VERIFICATION_PUBLIC_KEY` parsed as an asymmetric `KeyObject`: `RS256` for RSA keys, `ES256` for P-256 EC keys; `HS256` is restricted strictly to `NODE_ENV=test`).
+  * Bound to exact `sub` (user ID), `session_id`, allowlisted `scope`, `purpose: 'step_up_verification'`, and unique `jti`.
+  * Must contain numeric `iat` and `exp` claims with `iat` not in the future (beyond a 5-second clock-skew allowance) and a total lifetime (`exp - iat`) of **at most 60 seconds**.
+  * Parent session existence, active status, ownership, and remaining absolute lifetime are verified atomically inside the Redis Lua grant script **before** claiming `ticket_used:<jti>` (`NX`), so failed session checks never burn a valid ticket; replay attempts return `409 Conflict` (`ticket_already_used`).
+* **Production Safeguard:** Because no production MFA/TOTP/WebAuthn provider is built in, if `STEP_UP_VERIFICATION_PUBLIC_KEY` is unconfigured, malformed, or uses an unsupported key type/curve in `NODE_ENV=production`, requests fail closed with `501 Not Implemented` (`verification_provider_unavailable`). Test-only mock ticket generation is strictly restricted to `NODE_ENV=test`.
+* **Allowlisted Scopes:** `sensitive_action`, `credential_change`, `account_recovery`, `export_data`, `admin_action`.
+* **Duration Clamping:** Defaults to `300s` (5m), capped at `900s` (15m), and clamped so it can never outlive the parent session's absolute `max_expires_at`.
+
+Request body:
+
+```json
+{
+  "scope": "sensitive_action",
+  "verification_ticket": "<signed-step-up-ticket>",
+  "duration_seconds": 300
+}
+```
+
+Response (`200 OK`):
+
+```json
+{
+  "elevated": true,
+  "scope": "sensitive_action",
+  "expiresAt": "2026-10-10T10:05:00.000Z",
+  "remainingSeconds": 300
+}
+```
+
+Error responses:
+* `400 Bad Request` (`invalid_request` / `invalid_scope`): Missing parameters or unallowlisted scope.
+* `401 Unauthorized` (`invalid_ticket`): Untrusted signature, expired ticket, future `iat`, lifetime $> 60\text{ s}$, disallowed/mismatched algorithm, or user/session/scope mismatch.
+* `403 Forbidden` (`forbidden` / `session_expired`): Session ID mismatch or parent session expired / reached maximum lifetime.
+* `409 Conflict` (`ticket_already_used`): Verification ticket was already consumed.
+* `501 Not Implemented` (`verification_provider_unavailable`): No valid step-up verification public key configured in production.
+
+### GET `/api/v1/sessions/:id/elevate/:scope`
+
+Inspects whether the active session currently holds elevated trust for `:scope` (Module 10a).
+
+* **Authentication & Ownership:** User JWT Bearer token; `:id` must match the caller's active `session_id` (`403 Forbidden` otherwise).
+* **Expiration & Fail-Closed Behavior:** Validates parent session active status, ownership, and absolute lifetime before checking the scoped elevation key. When the elevation TTL expires, the session automatically reverts to baseline trust (`elevated: false`) without terminating the base session. Any Redis failure or state inconsistency fails closed (`elevated: false`).
+* **Note on Enforcement Boundary:** The `requireElevation(scope)` middleware helper is provided in `src/middleware/auth.js`, and route-level Policy Enforcement Point (PEP) attachment is scheduled for Module 10b.
+
+Response (`200 OK`):
+
+```json
+{
+  "elevated": true,
+  "scope": "sensitive_action",
+  "expiresAt": "2026-10-10T10:05:00.000Z",
+  "remainingSeconds": 245
 }
 ```
 
