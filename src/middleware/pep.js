@@ -449,12 +449,16 @@ function enforce(actionType, options = {}) {
         const delaySeconds =
           typeof options.delaySeconds === 'number' && options.delaySeconds > 0
             ? options.delaySeconds
-            : DEFAULT_DELAY_SECONDS;
+            : (activePolicy.cooling_off_defaults && activePolicy.cooling_off_defaults[routeSensitivity]) || DEFAULT_DELAY_SECONDS;
         return activeDelayHandler(req, res, {
           decisionRecord: plainDecision,
           riskTier: effectiveRiskTier,
           explanation: pdpResult.explanation,
-          delaySeconds
+          delaySeconds,
+          actionType,
+          routeSensitivity,
+          requiredScope,
+          eventRecord
         });
       }
 

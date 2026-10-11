@@ -8,6 +8,12 @@ const riskRouter = require('./routes/risk');
 const sessionsRouter = require('./routes/sessions');
 const policyRouter = require('./routes/policy');
 const accountActionsRouter = require('./routes/accountActions');
+const coolingOffRouter = require('./routes/coolingOff');
+const { setDelayHandler } = require('./middleware/pep');
+const { coolingOffDelayHandler } = require('./services/coolingOffService');
+
+// Connect cooling-off delay handler to PEP
+setDelayHandler(coolingOffDelayHandler);
 
 const app = express();
 
@@ -44,5 +50,8 @@ app.use('/api/v1/policy', policyRouter);
 
 // Protected sensitive account action routes (PEP enforcement layer)
 app.use('/api/v1/account', accountActionsRouter);
+
+// Cooling-off delayed action routes (PEP cooling-off layer)
+app.use('/api/v1/cooling-off', coolingOffRouter);
 
 module.exports = app;

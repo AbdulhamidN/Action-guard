@@ -9,6 +9,7 @@ const initSequenceEventModel = require('./SequenceEvent');
 const initRiskAssessmentModel = require('./RiskAssessment');
 const initPolicyDecisionModel = require('./PolicyDecision');
 const initElevationAuditLogModel = require('./ElevationAuditLog');
+const initDelayedActionModel = require('./DelayedAction');
 
 const User = initUserModel(sequelize);
 const Session = initSessionModel(sequelize);
@@ -20,6 +21,7 @@ const SequenceEvent = initSequenceEventModel(sequelize);
 const RiskAssessment = initRiskAssessmentModel(sequelize);
 const PolicyDecision = initPolicyDecisionModel(sequelize);
 const ElevationAuditLog = initElevationAuditLogModel(sequelize);
+const DelayedAction = initDelayedActionModel(sequelize);
 
 // Associations
 User.hasMany(Session, {
@@ -219,6 +221,46 @@ ElevationAuditLog.belongsTo(Session, {
   as: 'session'
 });
 
+User.hasMany(DelayedAction, {
+  foreignKey: 'user_id',
+  as: 'delayedActions',
+  onDelete: 'CASCADE'
+});
+DelayedAction.belongsTo(User, {
+  foreignKey: 'user_id',
+  as: 'user'
+});
+
+Session.hasMany(DelayedAction, {
+  foreignKey: 'session_id',
+  as: 'delayedActions',
+  onDelete: 'SET NULL'
+});
+DelayedAction.belongsTo(Session, {
+  foreignKey: 'session_id',
+  as: 'session'
+});
+
+PolicyDecision.hasMany(DelayedAction, {
+  foreignKey: 'decision_id',
+  as: 'delayedActions',
+  onDelete: 'SET NULL'
+});
+DelayedAction.belongsTo(PolicyDecision, {
+  foreignKey: 'decision_id',
+  as: 'policyDecision'
+});
+
+SecurityEvent.hasMany(DelayedAction, {
+  foreignKey: 'event_id',
+  as: 'delayedActions',
+  onDelete: 'SET NULL'
+});
+DelayedAction.belongsTo(SecurityEvent, {
+  foreignKey: 'event_id',
+  as: 'securityEvent'
+});
+
 module.exports = {
   sequelize,
   User,
@@ -230,5 +272,6 @@ module.exports = {
   SequenceEvent,
   RiskAssessment,
   PolicyDecision,
-  ElevationAuditLog
+  ElevationAuditLog,
+  DelayedAction
 };

@@ -5,6 +5,10 @@ const {
   stopBaselineRecalculationSchedule
 } = require('./jobs/baselineRecalculationJob');
 const {
+  startCoolingOffWorker,
+  stopCoolingOffWorker
+} = require('./jobs/coolingOffWorker');
+const {
   initSocketServer,
   closeSocketServer
 } = require('./realtime/socketServer');
@@ -21,11 +25,17 @@ server.listen(PORT, () => {
     startBaselineRecalculationSchedule();
     console.log('[Scheduler] Baseline recalculation job scheduled.');
   }
+
+  if (process.env.COOLING_OFF_WORKER_AUTO_START !== 'false') {
+    startCoolingOffWorker();
+    console.log('[Scheduler] Cooling-off enforcement worker started.');
+  }
 });
 
 async function gracefulShutdown(signal) {
   console.log(`Received ${signal}. Shutting down gracefully...`);
   stopBaselineRecalculationSchedule();
+  stopCoolingOffWorker();
   try {
     await closeSocketServer();
   } catch (err) {
@@ -45,4 +55,3 @@ async function gracefulShutdown(signal) {
 
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
-

@@ -118,7 +118,11 @@ const REDIS_PREFIXES = Object.freeze({
   SESSION_ELEVATIONS_INDEX: 'session_elevations:',
   TICKET_CLAIM: 'ticket_used:',
   STEP_UP_CHALLENGE: 'step_up_challenge:',
-  ACCOUNT_LOCK: 'account_lock:'
+  ACCOUNT_LOCK: 'account_lock:',
+  COOLING_OFF_ACTION: 'cooling_off:action:',
+  COOLING_OFF_USER_INDEX: 'cooling_off:user:',
+  COOLING_OFF_TOKEN_MAP: 'cooling_off:token:',
+  COOLING_OFF_LOCK: 'cooling_off:lock:'
 });
 
 module.exports = {

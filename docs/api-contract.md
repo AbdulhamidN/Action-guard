@@ -444,16 +444,33 @@ All five sensitive account routes run `authenticateToken` followed by `enforce(a
 * **Server-Side Context & Sensitivity Enforcement:** Request context (`ip_address`, `device_fingerprint`, `user_agent`, `geo_country`, `geo_region`) is extracted strictly from server headers/connection state via `extractServerRequestContext(req)`. Any `context`, `timestamp`, or `action_sensitivity` fields in `req.body` or `req.query` are ignored by the PEP.
 * **Action Lifecycle States (`security_events.metadata.action_status`):**
   * `attempted`: Recorded when the event is initially created in the PEP.
-  * `halted`: Recorded when the PEP halts the request (`reverify`, `delay`, or `block`).
+  * `halted`: Recorded when the PEP halts the request (`reverify` or `block`).
+  * `delayed`: Recorded when the PEP halts the request for cooling-off (`delay`) and persists a `DelayedAction`.
+  * `cancelled`: Recorded when a user cancels a pending delayed action during its cooling-off window.
+  * `expired`: Recorded when a pending delayed action exceeds its `expires_at` grace window without execution.
   * `authorized`: Recorded when the PEP permits execution (`allow`, `monitor`, `elevated_allowed`, `recommend_only_allowed`) before invoking `next()`.
-  * `rejected`: Recorded when post-PEP credential or domain validation fails (e.g. incorrect `current_password` or `recovery_email` matching primary `email`).
+  * `rejected`: Recorded when post-PEP credential/domain validation fails or when Zero Trust pre-execution rechecks reject a delayed action.
   * `failed_execution`: Recorded when a downstream database mutation or session invalidation throws an exception.
-  * `completed`: Recorded **only** after the route handler's database mutation (and post-mutation session invalidation) has succeeded.
-* **Mandatory Decision Audit & Truthful Containment:** Every PEP evaluation persists a row in `policy_decisions` (stamped with `policy_version: "<policy_id>@<schema_version>"`) **before** calling `next()`. For qualifying critical `block` decisions, `containSessionAndLockAccount` executes before finalizing `enforcement_outcome: 'contained_and_blocked'` or emitting `decision:recorded`; if decision persistence, policy evaluation, Redis elevation verification, or containment fails, the PEP fails closed with `503 policy_enforcement_unavailable` and never falsely reports `session_contained: true`.
+  * `completed`: Recorded **only** after the route handler's or delayed action's database mutation has succeeded.
+* **Mandatory Decision Audit & Truthful Containment:** Every PEP evaluation persists a row in `policy_decisions` (stamped with `policy_version: "<policy_id>@<schema_version>"`) **before** calling `next()`. For qualifying critical `block` decisions, `containSessionAndLockAccount` executes before finalizing `enforcement_outcome: 'contained_and_blocked'` or emitting `decision:recorded`; if decision persistence, policy evaluation, Redis elevation verification, delayed-action queueing, or containment fails, the PEP fails closed with `503 policy_enforcement_unavailable` and never falsely reports `session_contained: true`.
 * **PEP Halted Responses:**
   * `reverify` (without active scoped elevation) $\rightarrow$ `403 Forbidden` (`error.code: "step_up_required"`, `decision: "reverify"`, `decision_id`, `required_scope`, `risk_tier`, `challenge_endpoint`, `verify_endpoint`, `elevate_endpoint`, `explanation`).
-  * `delay` (even if elevated) $\rightarrow$ `403 Forbidden` (`error.code: "action_delayed"`, `decision: "delay"`, `decision_id`, `risk_tier`, `retry_after_seconds`, `explanation`).
+  * `delay` (even if elevated) $\rightarrow$ `403 Forbidden` (or `202 Accepted` when `X-Prefer-Status: 202` is passed) (`error.code: "action_delayed"`, `decision: "delay"`, `decision_id`, `risk_tier`, `retry_after_seconds`, `cooling_off_seconds`, `pending_action_id`, `cancellation_token`, `cancel_endpoint`, `status_endpoint`, `execute_at`, `expires_at`, `explanation`).
   * `block` (even if elevated) $\rightarrow$ `403 Forbidden` (`error.code: "action_blocked"`, `decision: "block"`, `decision_id`, `risk_tier`, `session_contained`, `account_locked`, optional `locked_until` and `retry_after_seconds`, `explanation`).
+
+### Cooling-Off Enforcement Endpoints (`/api/v1/cooling-off/*` — Module 10c, FR-32)
+
+When the PEP returns a `delay` decision on an approved sensitive route (`password_change`, `recovery_email_change`, `phone_number_change`, `mfa_change`, `high_impact_action`, or a registered custom executor), `coolingOffService.scheduleDelayedAction` validates and allowlists the action-specific payload, recursively strips any credential/secret/token/OTP fields across nested objects and arrays, and persists the delayed action in `delayed_actions` paired with a single-use cryptographic `cancellation_token` (`ctkn_<64-hex>`, stored only as a SHA-256 hash). For `password_change`, `current_password` is verified against `user.password_hash` before scheduling (`401 invalid_credentials` on mismatch), and `new_password` is bcrypt-hashed (`new_password_hash` is stripped from all public API responses, Redis cache entries, and event broadcasts).
+
+* `GET /api/v1/cooling-off/actions`: Lists active pending delayed actions for the authenticated user (`200 OK`, never exposes `cancellation_token_hash` or sensitive payload digests).
+* `GET /api/v1/cooling-off/actions/:id`: Retrieves status and sanitized `action_payload` of a specific delayed action owned by the authenticated user (`403 forbidden` if wrong owner, `404 delayed_action_not_found` if missing).
+* `POST /api/v1/cooling-off/actions/:id/cancel`: Cancels a pending delayed action prior to `expires_at` using `cancellation_token` (constant-time SHA-256 comparison). Returns `410 action_expired` (and transitions status to `'expired'`) if `expires_at` has already elapsed, `409 action_already_cancelled` on replay, or `403 invalid_cancellation_token` on mismatch. On valid cancellation, transitions status to `'cancelled'`, updates `security_events.metadata.action_status` to `'cancelled'`, cleans up Redis keys, and emits `cooling_off:cancelled`.
+* `POST /api/v1/cooling-off/actions/:id/execute`: Executes an owned delayed action after `execute_at` has elapsed and before `expires_at` (also processed automatically by `coolingOffWorker`, which uses atomic Redis `SET ... NX` lock acquisition and Lua compare-and-delete `executeReleaseLock`, and reconciles stale `'executing'` rows to `'failed'`). Rejects early execution with `409 action_still_cooling_off` (`remaining_seconds`) and expired actions with `410 delayed_action_expired`. Performs **Zero Trust pre-execution rechecks** immediately before mutation:
+  1. Verifies the user exists and is not under an active protective account lock (`user_account_locked`).
+  2. Requires a valid bound `session_id` and verifies session ownership, active state, and non-expiration across both MySQL and Redis via `validateActiveSession` (`session_invalidated_or_expired`).
+  3. Evaluates current risk via `riskEngineService.evaluateRisk`, failing closed if the Risk Engine is unavailable (`risk_engine_unavailable`).
+  4. Re-evaluates active policy via `decide(...)`: rejects on `block` (`policy_recheck_blocked`), risk tier increase (`risk_tier_increased`), or `delay` (`policy_recheck_delayed`), and for `reverify` requires an active scoped elevation (`checkElevation`) for the action's required scope (`step_up_elevation_required`).
+  5. Executes the approved state mutation (including updating `password_hash` and calling `terminateAllUserSessions` for `password_change`, and enforcing normalization and primary-email collision checks for `recovery_email_change`).
 
 ### GET `/api/v1/events`
 

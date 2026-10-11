@@ -426,6 +426,16 @@ class InMemoryRedisClient {
       return revokedList;
     }
 
+    if (script.includes('-- ATOMIC_RELEASE_LOCK')) {
+      const lockKey = keys[0];
+      const expectedValue = String(argv[0]);
+      const currentVal = this._getSync(lockKey);
+      if (currentVal !== null && String(currentVal) === expectedValue) {
+        return this._delSync(lockKey);
+      }
+      return 0;
+    }
+
     throw new Error('Unsupported Lua script in InMemoryRedisClient mock');
   }
 
@@ -662,6 +672,17 @@ redis.call('DEL', KEYS[1])
 return count
 `;
 
+const RELEASE_LOCK_LUA = `
+-- ATOMIC_RELEASE_LOCK
+-- KEYS[1]: lock_key
+-- ARGV[1]: expected_owner_token
+if redis.call("GET", KEYS[1]) == ARGV[1] then
+    return redis.call("DEL", KEYS[1])
+else
+    return 0
+end
+`;
+
 async function executeValidateAndTouch(sessionId, nowMs, idleWindowSec, throttleSec) {
   const client = getRedisClient();
   const key = `${SESSION_PREFIX}${sessionId}`;
@@ -705,6 +726,11 @@ async function executeRevokeSessionElevations(sessionId, elevationPrefix, sessio
   return client.eval(REVOKE_SESSION_ELEVATIONS_LUA, 1, setKey, elevationPrefix, sessionId);
 }
 
+async function executeReleaseLock(lockKey, expectedValue) {
+  const client = getRedisClient();
+  return client.eval(RELEASE_LOCK_LUA, 1, lockKey, String(expectedValue));
+}
+
 module.exports = {
   getRedisClient,
   storeSession,
@@ -714,5 +740,6 @@ module.exports = {
   executeValidateAndTouch,
   executeGrantElevation,
   executeRevokeSessionElevations,
+  executeReleaseLock,
   SESSION_PREFIX
 };
