@@ -10,6 +10,8 @@ const initRiskAssessmentModel = require('./RiskAssessment');
 const initPolicyDecisionModel = require('./PolicyDecision');
 const initElevationAuditLogModel = require('./ElevationAuditLog');
 const initDelayedActionModel = require('./DelayedAction');
+const initWebhookEndpointModel = require('./WebhookEndpoint');
+const initWebhookDeliveryLogModel = require('./WebhookDeliveryLog');
 
 const User = initUserModel(sequelize);
 const Session = initSessionModel(sequelize);
@@ -22,6 +24,8 @@ const RiskAssessment = initRiskAssessmentModel(sequelize);
 const PolicyDecision = initPolicyDecisionModel(sequelize);
 const ElevationAuditLog = initElevationAuditLogModel(sequelize);
 const DelayedAction = initDelayedActionModel(sequelize);
+const WebhookEndpoint = initWebhookEndpointModel(sequelize);
+const WebhookDeliveryLog = initWebhookDeliveryLogModel(sequelize);
 
 // Associations
 User.hasMany(Session, {
@@ -261,6 +265,17 @@ DelayedAction.belongsTo(SecurityEvent, {
   as: 'securityEvent'
 });
 
+// Module 11.2: WebhookEndpoint & WebhookDeliveryLog Associations
+WebhookEndpoint.hasMany(WebhookDeliveryLog, {
+  foreignKey: 'webhook_id',
+  as: 'deliveryLogs',
+  onDelete: 'CASCADE'
+});
+WebhookDeliveryLog.belongsTo(WebhookEndpoint, {
+  foreignKey: 'webhook_id',
+  as: 'webhook'
+});
+
 module.exports = {
   sequelize,
   User,
@@ -273,5 +288,7 @@ module.exports = {
   RiskAssessment,
   PolicyDecision,
   ElevationAuditLog,
-  DelayedAction
+  DelayedAction,
+  WebhookEndpoint,
+  WebhookDeliveryLog
 };
