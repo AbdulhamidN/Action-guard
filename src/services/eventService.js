@@ -17,9 +17,16 @@ const { SecurityEvent } = require('../database/models');
  * @param {Date|string} [eventData.timestamp] - Optional event timestamp (defaults to current date/time)
  * @param {object} [eventData.context] - Plain contextual data (ip_address, user_agent, etc.)
  * @param {object} [eventData.metadata] - Plain action metadata (action_sensitivity, etc.)
+ * @param {boolean} [eventData.requireAssessmentForEmit=false] - When true, suppresses pipeline:event_processed if risk assessment fails
+ * @param {object} [options={}]
+ * @param {boolean} [options.requireAssessmentForEmit=false] - When true, suppresses pipeline:event_processed if risk assessment fails
  * @returns {Promise<object>} The created SecurityEvent database record
  */
-async function recordSecurityEvent(eventData = {}) {
+async function recordSecurityEvent(eventData = {}, options = {}) {
+  const requireAssessmentForEmit = Boolean(
+    (options && options.requireAssessmentForEmit) ||
+      eventData.requireAssessmentForEmit
+  );
   const resolvedUserId = eventData.userId || eventData.user_id;
   const resolvedEventType = eventData.eventType || eventData.event_type;
   const resolvedSessionId =
@@ -83,19 +90,21 @@ async function recordSecurityEvent(eventData = {}) {
     });
 
     // Module 7.2: Single emit point after correlation, scoring, and persistence
-    try {
-      const eventBus = require('../events/eventBus');
-      const plainEvent = typeof event.get === 'function' ? event.get({ plain: true }) : { ...event };
-      const plainAssessment = assessmentRecord
-        ? (typeof assessmentRecord.get === 'function' ? assessmentRecord.get({ plain: true }) : { ...assessmentRecord })
-        : null;
+    if (!requireAssessmentForEmit || Boolean(assessmentRecord)) {
+      try {
+        const eventBus = require('../events/eventBus');
+        const plainEvent = typeof event.get === 'function' ? event.get({ plain: true }) : { ...event };
+        const plainAssessment = assessmentRecord
+          ? (typeof assessmentRecord.get === 'function' ? assessmentRecord.get({ plain: true }) : { ...assessmentRecord })
+          : null;
 
-      eventBus.safeEmit('pipeline:event_processed', {
-        event: plainEvent,
-        assessment: plainAssessment
-      });
-    } catch (err) {
-      console.warn('[EventPipeline] Event bus emit failed:', err.message);
+        eventBus.safeEmit('pipeline:event_processed', {
+          event: plainEvent,
+          assessment: plainAssessment
+        });
+      } catch (err) {
+        console.warn('[EventPipeline] Event bus emit failed:', err.message);
+      }
     }
   }
 

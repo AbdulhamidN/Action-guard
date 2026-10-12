@@ -38,7 +38,7 @@ The API key identifies the calling application. It is distinct from the end user
 
 | Method | Path                                     | Purpose                                                                      |
 | ------ | ---------------------------------------- | ---------------------------------------------------------------------------- |
-| POST   | `/api/v1/events`                         | *(Planned - Module 11)* Submit a security event for logging and evaluation   |
+| POST   | `/api/v1/events`                         | Submit an external security event for idempotent logging and evaluation      |
 | POST   | `/api/v1/risk/evaluate`                  | Request a risk score for a given user/session without submitting a new event |
 | POST   | `/api/v1/policy/evaluate`                | Evaluate a proposed action against policy and receive an advisory decision   |
 | GET    | `/api/v1/sessions/:id`                   | Retrieve current risk state and metadata for a session                       |
@@ -55,13 +55,15 @@ The API key identifies the calling application. It is distinct from the end user
 | GET    | `/api/v1/sequences/current`              | Retrieve current active sequence/timeline for the authenticated user         |
 | POST   | `/api/v1/webhooks`                       | *(Planned - Module 11)* Register a webhook URL for decision/event alerts     |
 
-In practice, `POST /events` is planned as a primary external integration point (Module 11). Internal protected routes (`/api/v1/account/*`) execute through the Policy Enforcement Point (`enforce(actionType)`) middleware, which evaluates live risk, enforces the active policy decision, records an immutable `policy_decisions` audit row, and broadcasts real-time notifications before any account state mutation occurs.
+`POST /api/v1/events` is the primary external telemetry ingestion endpoint (Module 11.2b). Internal protected routes (`/api/v1/account/*`) execute through the Policy Enforcement Point (`enforce(actionType)`) middleware, which evaluates live risk, enforces the active policy decision, records an immutable `policy_decisions` audit row, and broadcasts real-time notifications before any account state mutation occurs.
 
 `/risk/evaluate` and `/policy/evaluate` provide narrower advisory operations for applications that want to check current risk or evaluate a hypothetical action without generating a new logged event.
 
 ## 4. Request Structure
 
-### POST `/api/v1/events` *(Planned - Module 11)*
+### POST `/api/v1/events`
+
+Submits an externally observed security event using service-level API key authentication (`Authorization: Bearer <api_key>`).
 
 ```json
 {
@@ -69,22 +71,34 @@ In practice, `POST /events` is planned as a primary external integration point (
   "session_id": "sess_98765",
   "event_type": "password_change",
   "timestamp": "2026-09-26T14:32:00Z",
+  "idempotency_key": "idem_ext_001",
   "context": {
     "ip_address": "196.189.45.12",
     "device_fingerprint": "fp_a1b2c3",
     "user_agent": "Mozilla/5.0 ..."
   },
   "metadata": {
-    "action_sensitivity": "high"
+    "action_sensitivity": "high",
+    "operation": "update_credentials",
+    "correlation_id": "corr_98765"
   }
 }
 ```
 
-### Field Notes
+### Field & Validation Notes
 
-* `event_type` — one of the event types defined in the security-event schema.
-* `context` — provides information used for signal collection. Missing fields reduce risk-scoring accuracy but do not necessarily reject the request.
-* `metadata.action_sensitivity` — one of `low`, `medium`, `high`, or `critical`. It is used by the Policy Engine together with the risk score.
+* **Strict Top-Level Allowlist:** Accepts only `user_id`, `session_id` (optional), `event_type`, `timestamp`, `context` (optional), `metadata` (optional), and `idempotency_key` (optional). Any unknown field or attempt to supply computed/authoritative values (`event_id`, `risk_score`, `risk_tier`, `decision`, `policy_decision`, `is_trusted_device`, `trusted_device`, `source`) is rejected with `400 invalid_request`.
+* `user_id` — must identify an existing `users` record (`400 invalid_request` otherwise).
+* `session_id` — optional; when supplied, must exist in `sessions` and belong to `user_id` (`400 invalid_request` otherwise).
+* `event_type` — one of the 13 supported event types defined in `SecurityEvent.SUPPORTED_EVENT_TYPES` (`400 invalid_event_type` otherwise).
+* `timestamp` — required strict ISO-8601 date-time string with timezone (`Z` or `±HH:MM`). Must fall within the configurable acceptance window (default: at most 5 minutes in the future via `EXTERNAL_EVENT_MAX_FUTURE_SKEW_MS` and at most 30 days in the past via `EXTERNAL_EVENT_MAX_PAST_AGE_MS`).
+* `context` — strict allowlist (`ip_address`, `device_fingerprint`, `user_agent`). Client-supplied geolocation (`geo_country`, `geo_region`) or coordinates (`latitude`, `longitude`, `coordinates`) are rejected; approximate coarse location is derived server-side from the validated `ip_address`.
+* `metadata` — strict allowlist (`action_sensitivity`, `operation`, `target`, `resource`, `reason`, `correlation_id`, `external_ref`, `details`, max 8 keys). `action_sensitivity` accepts `low`, `medium`, `high`, or `critical` and is floored at the policy-defined minimum sensitivity for `event_type` (`DEFAULT_ACTION_SENSITIVITY`). Secret-bearing keys are rejected or stripped and secret-bearing values are redacted. Accepted events are server-stamped with `metadata.source = "external_api"` and a one-way `metadata.api_key_fingerprint` (`akfp_<hex>`).
+* **Idempotency (`Idempotency-Key` header and/or `idempotency_key` body):** If both are supplied, they must match (`400 invalid_request` on mismatch). Uses atomic Redis leases (`SET ext_event_idem:<apiKeyFp>:<key> ... EX <lease> NX`) paired with a deterministic `event_id` (`evt_idem_<hex>`) and `metadata.idempotency_payload_hash` in MySQL:
+  * `201 Created`: First successful ingestion and pipeline evaluation.
+  * `200 OK`: Replay with the same idempotency key and identical canonical payload returns the cached decision response without creating a duplicate event.
+  * `409 Conflict` (`idempotency_conflict` / `idempotency_in_progress`): Reusing an idempotency key with a different canonical payload, or concurrent submission while a request with the same key is actively in progress.
+  * `503 Service Unavailable` (`pipeline_unavailable` / `service_unavailable`): Risk/persistence pipeline or Redis idempotency store is unavailable; the in-progress lease is released so retries recover cleanly without duplicate events.
 
 Supported event types include:
 

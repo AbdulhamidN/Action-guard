@@ -2,9 +2,30 @@ const express = require('express');
 const { authenticateApiKey } = require('../middleware/auth');
 const { SecurityEvent } = require('../database/models');
 const { querySecurityEvents } = require('../services/eventService');
+const { ingestExternalSecurityEvent } = require('../services/eventIngestionService');
 const { sendError } = require('../utils/errors');
 
 const router = express.Router();
+
+/**
+ * POST /api/v1/events
+ * Submit an external security event for validation, idempotent persistence,
+ * sequence correlation, and risk/policy evaluation.
+ * Requires service-level API key authentication.
+ */
+router.post('/', authenticateApiKey, async (req, res) => {
+  try {
+    const result = await ingestExternalSecurityEvent(req);
+    return res.status(result.httpStatus).json(result.body);
+  } catch {
+    return sendError(
+      res,
+      503,
+      'pipeline_unavailable',
+      'Security event ingestion service is temporarily unavailable'
+    );
+  }
+});
 
 /**
  * GET /api/v1/events

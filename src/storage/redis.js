@@ -436,6 +436,23 @@ class InMemoryRedisClient {
       return 0;
     }
 
+    if (script.includes('-- ATOMIC_COMPLETE_IDEMPOTENCY_LEASE')) {
+      const idemKey = keys[0];
+      const expectedValue = String(argv[0]);
+      const completedJson = String(argv[1]);
+      const ttlSeconds = Number(argv[2]);
+      const currentVal = this._getSync(idemKey);
+      if (currentVal !== null && String(currentVal) === expectedValue) {
+        if (Number.isFinite(ttlSeconds) && ttlSeconds > 0) {
+          this._setSync(idemKey, completedJson, 'EX', ttlSeconds);
+        } else {
+          this._setSync(idemKey, completedJson);
+        }
+        return 1;
+      }
+      return 0;
+    }
+
     if (script.includes('-- ATOMIC_RATE_LIMIT')) {
       const rateKey = keys[0];
       const nowMs = Number(argv[0]);
