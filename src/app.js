@@ -9,6 +9,7 @@ const sessionsRouter = require('./routes/sessions');
 const policyRouter = require('./routes/policy');
 const accountActionsRouter = require('./routes/accountActions');
 const coolingOffRouter = require('./routes/coolingOff');
+const webhooksRouter = require('./routes/webhooks');
 const { setDelayHandler } = require('./middleware/pep');
 const { coolingOffDelayHandler } = require('./services/coolingOffService');
 const {
@@ -106,5 +107,8 @@ app.use('/api/v1/account', sensitiveActionRateLimiter, accountActionsRouter);
 
 // Cooling-off delayed action routes (PEP cooling-off layer)
 app.use('/api/v1/cooling-off', sensitiveActionRateLimiter, coolingOffRouter);
+
+// Administrative webhook endpoint management routes
+app.use('/api/v1/webhooks', sensitiveActionRateLimiter, webhooksRouter);
 
 module.exports = app;

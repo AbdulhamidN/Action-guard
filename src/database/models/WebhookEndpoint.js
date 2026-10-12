@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const { DataTypes } = require('sequelize');
+const { validateWebhookDestinationUrl } = require('../../utils/webhookUrlValidator');
 
 const SUPPORTED_WEBHOOK_EVENTS = Object.freeze([
   'event.processed',
@@ -27,18 +28,7 @@ module.exports = (sequelize) => {
           notNull: { msg: 'url is required' },
           notEmpty: { msg: 'url cannot be empty' },
           isHttpsUrl(value) {
-            if (typeof value !== 'string') {
-              throw new Error('url must be a string');
-            }
-            let parsed;
-            try {
-              parsed = new URL(value);
-            } catch {
-              throw new Error('url must be a valid URL');
-            }
-            if (parsed.protocol !== 'https:') {
-              throw new Error('url must use https:// protocol');
-            }
+            validateWebhookDestinationUrl(value);
           }
         }
       },

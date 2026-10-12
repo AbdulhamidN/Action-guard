@@ -53,7 +53,13 @@ The API key identifies the calling application. It is distinct from the end user
 | POST   | `/api/v1/account/high-impact`            | Protected sensitive action: execute a high-impact operation                  |
 | GET    | `/api/v1/events`                         | Query historical events by user, session, or time range                      |
 | GET    | `/api/v1/sequences/current`              | Retrieve current active sequence/timeline for the authenticated user         |
-| POST   | `/api/v1/webhooks`                       | *(Planned - Module 11)* Register a webhook URL for decision/event alerts     |
+| POST   | `/api/v1/webhooks`                       | Register an outbound webhook endpoint (Admin API key required)               |
+| GET    | `/api/v1/webhooks`                       | List registered webhook endpoints with safe metadata (Admin API key required)|
+| GET    | `/api/v1/webhooks/:id`                   | Retrieve a webhook endpoint by ID (Admin API key required)                   |
+| PATCH  | `/api/v1/webhooks/:id`                   | Update a webhook endpoint's URL, subscriptions, or status (Admin required)   |
+| POST   | `/api/v1/webhooks/:id/activate`          | Explicitly activate a webhook endpoint (Admin API key required)              |
+| POST   | `/api/v1/webhooks/:id/deactivate`        | Explicitly deactivate a webhook endpoint (Admin API key required)            |
+| DELETE | `/api/v1/webhooks/:id`                   | Delete a webhook endpoint and cascade-delete delivery logs (Admin required)  |
 
 `POST /api/v1/events` is the primary external telemetry ingestion endpoint (Module 11.2b). Internal protected routes (`/api/v1/account/*`) execute through the Policy Enforcement Point (`enforce(actionType)`) middleware, which evaluates live risk, enforces the active policy decision, records an immutable `policy_decisions` audit row, and broadcasts real-time notifications before any account state mutation occurs.
 
@@ -656,39 +662,131 @@ Every event submitted to or logged internally by ActionGuard conforms to this st
 }
 ```
 
-## 9. Webhooks *(Planned - Module 11)*
+## 9. Webhooks — Administrative Endpoint Management (Module 11.2c Stage 1)
 
-### POST `/api/v1/webhooks` *(Planned - Module 11)*
+### 9.1 Authorization & Rate Limiting
 
-Registers a URL to receive asynchronous notifications when a decision is made.
+All `/api/v1/webhooks` endpoints are restricted to platform administrators and protected by the `sensitive_action` rate-limit tier (`sensitiveActionRateLimiter`, default 15 requests / 60s window):
+
+* **Administrator Credential Required (`ACTIONGUARD_ADMIN_API_KEY`):** Callers must authenticate via `Authorization: Bearer <admin_api_key>` or `X-Admin-Api-Key: <admin_api_key>`. The configured `ACTIONGUARD_ADMIN_API_KEY` must be at least 32 characters in length and distinct from the service integration key (`API_KEY` / `ACTIONGUARD_API_KEY`). Keys are verified using constant-time SHA-256 digest comparison (`constantTimeKeyMatch`).
+* **Configuration Validation Precedence (`401 Unauthorized`):** After rejecting query-parameter credentials (`?apiKey=...`, `?token=...`) and missing, malformed, or conflicting (`Authorization` + `X-Admin-Api-Key`) headers with `401 unauthorized`, `requireWebhookAdmin` validates administrator configuration (`ACTIONGUARD_ADMIN_API_KEY` present, $\ge 32$ chars, and distinct from `API_KEY` / `ACTIONGUARD_API_KEY`) **before** inspecting non-admin credentials. If administrator configuration is missing or invalid, requests fail closed immediately with `401 unauthorized` without inspecting service keys or user JWTs.
+* **Non-Administrator Rejection (`403 Forbidden`):** When administrator configuration is valid, authenticated non-administrator callers — including valid end-user session JWTs (even with `admin_action` elevation) and valid service-level event-ingestion API keys (`API_KEY` / `ACTIONGUARD_API_KEY`, whether supplied in `Authorization: Bearer` or `X-Admin-Api-Key`) — are rejected with `403 forbidden`.
+
+### 9.2 Secret Generation, One-Time Disclosure, Encryption at Rest & Confidentiality
+
+* **Server-Generated Identifiers & Signing Secrets:** On `POST /api/v1/webhooks`, ActionGuard generates the endpoint `id` (`whk_<uuid>`) and a 256-bit cryptographically random signing secret (`whsec_<64 hex chars>`) on the server. Clients cannot supply `id`, `secret`, `signing_secret`, `encrypted_secret`, `secret_iv`, `secret_auth_tag`, or `secret_prefix`.
+* **One-Time Creation Disclosure (`signing_secret`):** The full generated `signing_secret` (`whsec_<64 hex chars>`) is returned **once and only once** in the `201 Created` response of `POST /api/v1/webhooks`, strictly after the encrypted endpoint record is persisted to the database. Receiving applications must securely store `signing_secret` upon registration to verify `X-ActionGuard-Webhook-Signature` HMAC-SHA256 signatures when outbound delivery is enabled.
+* **Strict Post-Creation Confidentiality:** Subsequent list (`GET /api/v1/webhooks`), retrieve (`GET /api/v1/webhooks/:id`), update (`PATCH /api/v1/webhooks/:id`), activate (`POST /api/v1/webhooks/:id/activate`), deactivate (`POST /api/v1/webhooks/:id/deactivate`), and delete (`DELETE /api/v1/webhooks/:id`) responses **never** return `signing_secret` (exposing only the 8-hex-character `secret_prefix`, e.g. `whsec_8f9a1b2c`). Plaintext secrets, `encrypted_secret`, `secret_iv`, `secret_auth_tag`, and encryption keys are never included in logs, audit events, delivery logs, or error responses, and no secret-retrieval endpoint exists.
+* **AES-256-GCM Encryption at Rest & Key Persistence:** The signing secret is encrypted before persistence using AES-256-GCM (`encrypted_secret`, 96-bit `secret_iv`, and 128-bit `secret_auth_tag`) backed by `WEBHOOK_SECRET_ENCRYPTION_KEY` ($\ge 32$ characters; required in both `development` and `production`, i.e. whenever `NODE_ENV !== 'test'` or `REQUIRE_WEBHOOK_ENCRYPTION_KEY=true`). Operators must keep `WEBHOOK_SECRET_ENCRYPTION_KEY` stable across application restarts and all delivery-worker processes; key rotation is not automatically performed in Stage 1. If the encryption key is missing outside `NODE_ENV=test` or invalid in any environment, registration fails closed with `503 webhook_encryption_unavailable`.
+
+### 9.3 Destination URL & Subscription Validation
+
+* **HTTPS Required:** `url` must be a valid URL ($\le 512$ chars) using `https://`. In `NODE_ENV=production`, `https://` is unconditionally required. For local development only (`NODE_ENV !== 'production'`), `http://` is permitted only when `ALLOW_INSECURE_HTTP_WEBHOOKS=true` is explicitly set.
+* **SSRF & Credential Hardening (Service & Model Layers):** Enforced consistently at both the service layer (`webhookEndpointService`) and the model layer (`WebhookEndpoint` validator). Destination URLs must not contain embedded credentials (`user:pass@`), URL fragments (`#...`), whitespace/control characters, single-label internal hostnames, `localhost` / `.local` / `.internal` / `.localdomain` / `.home.arpa` / `.test` / `.invalid` / `.lan` / `.corp` domains, or non-public/special-purpose IPv4 and IPv6 addresses evaluated via byte-level CIDR matching (`0.0.0.0/8`, `10.0.0.0/8`, `100.64.0.0/10`, `127.0.0.0/8`, `169.254.0.0/16`, `172.16.0.0/12`, `192.0.0.0/24`, `192.0.2.0/24`, `192.88.99.0/24`, `192.168.0.0/16`, `198.18.0.0/15`, `198.51.100.0/24`, `203.0.113.0/24`, `224.0.0.0/4`, `240.0.0.0/4`, `::/96` including `::1`, `::` and IPv4-compatible IPv6 `::127.0.0.1` / `::169.254.169.254`, IPv4-mapped `::ffff:0:0/96` for non-public IPv4, IPv4-translated `::ffff:0:0:0/96`, NAT64 `64:ff9b::/96` and `64:ff9b:1::/48`, Discard-Only `100::/64`, IETF/Teredo/Benchmarking `2001::/23`, Documentation `2001:db8::/32`, 6to4 `2002::/16`, ULA `fc00::/7`, Link-Local `fe80::/10`, Site-Local `fec0::/10`, Multicast `ff00::/8`, and any IPv6 outside Global Unicast `2000::/3`). Local targets are only permitted outside production when `ALLOW_LOCAL_WEBHOOK_TARGETS=true`. Registration-time validation does not replace delivery-time DNS resolution and IP pinning, which are mandatory for the Stage 2 outbound delivery worker.
+* **Supported Events (`subscribed_events`):** Non-empty array of unique values from `WebhookEndpoint.SUPPORTED_WEBHOOK_EVENTS`:
+  * `event.processed`
+  * `decision.recorded`
+  If omitted on `POST /api/v1/webhooks`, defaults to `["event.processed", "decision.recorded"]`.
+
+### 9.4 Endpoint Specifications
+
+#### `POST /api/v1/webhooks` — Register a Webhook Endpoint
+
+Permitted request body fields (`url`, `subscribed_events`, `description`, `is_active`; unknown or internal fields rejected with `400 invalid_request`):
 
 ```json
 {
-  "url": "https://banking-app.example.com/actionguard-webhook",
-  "events": [
-    "decision.reverify",
-    "decision.block",
-    "decision.delay"
-  ]
+  "url": "https://siem.example.com/webhooks/actionguard",
+  "subscribed_events": ["event.processed", "decision.recorded"],
+  "description": "Production SIEM Receiver",
+  "is_active": true
 }
 ```
 
-### Webhook Payload
+Response (`201 Created` — includes one-time `signing_secret`):
 
 ```json
 {
-  "event": "decision.block",
-  "user_id": "usr_12345",
-  "session_id": "sess_98765",
-  "decision": "block",
-  "risk_score": 92,
-  "timestamp": "2026-09-26T14:32:05Z"
+  "webhook": {
+    "id": "whk_8b4e1a20-9f88-4c11-a210-4b23901a9901",
+    "url": "https://siem.example.com/webhooks/actionguard",
+    "subscribed_events": ["event.processed", "decision.recorded"],
+    "description": "Production SIEM Receiver",
+    "secret_prefix": "whsec_8f9a1b2c",
+    "signing_secret": "whsec_8f9a1b2c4d5e6f708192a3b4c5d6e7f80123456789abcdef0123456789abcdef",
+    "is_active": true,
+    "created_at": "2026-10-12T19:00:00.000Z",
+    "updated_at": "2026-10-12T19:00:00.000Z"
+  }
+}
+```
+*(Note: `signing_secret` is returned **only once** in the `201 Created` registration response after persistence succeeds. Store it securely in the receiving integration; it is omitted from all subsequent responses.)*
+
+#### `GET /api/v1/webhooks` — List Registered Endpoints
+
+Optional query parameters: `is_active` (`true` | `false`), `limit` (`1..100`, default `50`), `offset` ($\ge 0$, default `0`).
+
+Response (`200 OK`):
+
+```json
+{
+  "webhooks": [
+    {
+      "id": "whk_8b4e1a20-9f88-4c11-a210-4b23901a9901",
+      "url": "https://siem.example.com/webhooks/actionguard",
+      "subscribed_events": ["event.processed", "decision.recorded"],
+      "description": "Production SIEM Receiver",
+      "secret_prefix": "whsec_8f9a1b2c",
+      "is_active": true,
+      "created_at": "2026-10-12T19:00:00.000Z",
+      "updated_at": "2026-10-12T19:00:00.000Z"
+    }
+  ],
+  "count": 1,
+  "total": 1
 }
 ```
 
-Webhook delivery is best-effort in the MVP. Failed deliveries are logged but not automatically retried.
+#### `GET /api/v1/webhooks/:id` — Retrieve Endpoint by ID
 
-Signed webhook payloads, allowing the receiving application to verify that a request genuinely came from ActionGuard, are a near-term extension and are not yet implemented.
+Returns `200 OK` with `{ "webhook": { ... } }` (without `signing_secret`), or `404 webhook_not_found` if no endpoint exists with `:id`.
+
+#### `PATCH /api/v1/webhooks/:id` — Update Endpoint Settings
+
+Accepts at least one of `url`, `subscribed_events`, `description`, or `is_active`. Returns `200 OK` with `{ "webhook": { ... } }` (without `signing_secret`).
+
+#### `POST /api/v1/webhooks/:id/activate` & `POST /api/v1/webhooks/:id/deactivate`
+
+Explicitly sets `is_active` to `true` or `false` while preserving the endpoint record and historical `webhook_delivery_logs`. Returns `200 OK` with `{ "webhook": { ... } }` (without `signing_secret`).
+
+#### `DELETE /api/v1/webhooks/:id` — Delete Endpoint
+
+Deletes the `WebhookEndpoint` record and cascade-deletes associated `webhook_delivery_logs` rows (`ON DELETE CASCADE`).
+
+Response (`200 OK`):
+
+```json
+{
+  "deleted": true,
+  "id": "whk_8b4e1a20-9f88-4c11-a210-4b23901a9901"
+}
+```
+
+### 9.5 Webhook Endpoint Error Codes
+
+| HTTP Status | Error Code                       | Meaning                                                                          |
+| ----------- | -------------------------------- | -------------------------------------------------------------------------------- |
+| 400         | `invalid_request`                | Unknown/privileged field, malformed ID (`whk_...`), bad `description`/`is_active` |
+| 400         | `invalid_webhook_url`            | Non-HTTPS URL, malformed URL, embedded credentials, fragment, or SSRF/local host |
+| 400         | `invalid_subscribed_events`      | Empty array, duplicate event, or unsupported event name                          |
+| 401         | `unauthorized`                   | Missing, malformed, conflicting, or invalid administrator API key or config      |
+| 403         | `forbidden`                      | Authenticated non-admin caller (end-user JWT or service integration API key)     |
+| 404         | `webhook_not_found`              | Webhook endpoint with the specified `:id` does not exist                         |
+| 429         | `rate_limited`                   | `sensitive_action` rate limit exceeded                                           |
+| 500         | `internal_error`                 | Unexpected database or runtime failure (internal details masked)                 |
+| 503         | `webhook_encryption_unavailable` | `WEBHOOK_SECRET_ENCRYPTION_KEY` is missing outside `NODE_ENV=test` or invalid    |
+
+*(Note: Asynchronous outbound webhook delivery workers, delivery-time DNS resolution/IP pinning, and HMAC-SHA256 payload signing are scheduled for Module 11.2c Stage 2.)*
 
 ## 10. Versioning Policy
 
