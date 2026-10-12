@@ -2,6 +2,7 @@
 
 const express = require('express');
 const { authenticateToken } = require('../middleware/auth');
+const { VALIDATION_LIMITS, validateIdParam } = require('../middleware/validation');
 const {
   getDelayedAction,
   listDelayedActionsForUser,
@@ -51,7 +52,7 @@ router.get('/actions', authenticateToken, async (req, res) => {
  *
  * Retrieves details of a specific delayed action.
  */
-router.get('/actions/:id', authenticateToken, async (req, res) => {
+router.get('/actions/:id', validateIdParam('id'), authenticateToken, async (req, res) => {
   try {
     const userId = req.user.id || req.user.user_id;
     const action = await getDelayedAction(req.params.id);
@@ -96,15 +97,35 @@ router.get('/actions/:id', authenticateToken, async (req, res) => {
  * Cancels a pending delayed action during its cooling-off period.
  * Requires cancellation_token in request body or X-Cancellation-Token header.
  */
-router.post('/actions/:id/cancel', authenticateToken, async (req, res) => {
+router.post('/actions/:id/cancel', validateIdParam('id'), authenticateToken, async (req, res) => {
   try {
     const userId = req.user.id || req.user.user_id;
-    const token =
-      (req.body && req.body.cancellation_token) ||
-      req.headers['x-cancellation-token'] ||
-      '';
+    const rawBodyToken = req.body ? req.body.cancellation_token : undefined;
+    const rawHeaderToken = req.headers['x-cancellation-token'];
 
-    const reason = (req.body && req.body.reason) || 'user_requested_cancellation';
+    if (
+      rawBodyToken !== undefined &&
+      (typeof rawBodyToken !== 'string' || rawBodyToken.length > VALIDATION_LIMITS.MAX_TOKEN_LENGTH)
+    ) {
+      return sendError(res, 400, 'invalid_request', 'Invalid cancellation_token format');
+    }
+    if (
+      rawHeaderToken !== undefined &&
+      (typeof rawHeaderToken !== 'string' || rawHeaderToken.length > VALIDATION_LIMITS.MAX_TOKEN_LENGTH)
+    ) {
+      return sendError(res, 400, 'invalid_request', 'Invalid X-Cancellation-Token header format');
+    }
+
+    const token = rawBodyToken || rawHeaderToken || '';
+
+    const rawReason = req.body ? req.body.reason : undefined;
+    if (
+      rawReason !== undefined &&
+      (typeof rawReason !== 'string' || rawReason.length > 255)
+    ) {
+      return sendError(res, 400, 'invalid_request', 'reason must be a string up to 255 characters');
+    }
+    const reason = rawReason || 'user_requested_cancellation';
 
     const cancelledAction = await cancelDelayedAction({
       actionId: req.params.id,
@@ -133,7 +154,7 @@ router.post('/actions/:id/cancel', authenticateToken, async (req, res) => {
  *
  * Manually triggers execution of an eligible delayed action whose cooling-off period has expired.
  */
-router.post('/actions/:id/execute', authenticateToken, async (req, res) => {
+router.post('/actions/:id/execute', validateIdParam('id'), authenticateToken, async (req, res) => {
   try {
     const userId = req.user.id || req.user.user_id;
     const action = await getDelayedAction(req.params.id);

@@ -436,6 +436,46 @@ class InMemoryRedisClient {
       return 0;
     }
 
+    if (script.includes('-- ATOMIC_RATE_LIMIT')) {
+      const rateKey = keys[0];
+      const nowMs = Number(argv[0]);
+      const windowMs = Number(argv[1]);
+      const maxReq = Number(argv[2]);
+
+      const raw = this._getSync(rateKey);
+      let state = null;
+      if (raw) {
+        try {
+          const decoded = JSON.parse(raw);
+          if (decoded && typeof decoded === 'object') {
+            state = decoded;
+          }
+        } catch {
+          state = null;
+        }
+      }
+
+      if (!state || !Number.isFinite(Number(state.resetAtMs)) || nowMs >= Number(state.resetAtMs)) {
+        const resetAtMs = nowMs + windowMs;
+        state = { count: 1, resetAtMs };
+        this._setSync(rateKey, JSON.stringify(state), 'PX', windowMs);
+        const allowed = 1 <= maxReq ? 1 : 0;
+        const remaining = Math.max(0, maxReq - 1);
+        return [allowed, 1, remaining, resetAtMs];
+      }
+
+      const nextCount = (Number(state.count) || 0) + 1;
+      const resetAtMs = Number(state.resetAtMs);
+      state.count = nextCount;
+      const remMs = Math.max(1, resetAtMs - nowMs);
+      this._setSync(rateKey, JSON.stringify(state), 'PX', remMs);
+
+      if (nextCount > maxReq) {
+        return [0, nextCount, 0, resetAtMs];
+      }
+      return [1, nextCount, Math.max(0, maxReq - nextCount), resetAtMs];
+    }
+
     throw new Error('Unsupported Lua script in InMemoryRedisClient mock');
   }
 
@@ -683,6 +723,42 @@ else
 end
 `;
 
+const CONSUME_RATE_LIMIT_LUA = `
+-- ATOMIC_RATE_LIMIT
+-- KEYS[1]: rate_limit_key
+-- ARGV[1]: now_ms
+-- ARGV[2]: window_ms
+-- ARGV[3]: max_requests
+local raw = redis.call('GET', KEYS[1])
+local nowMs = tonumber(ARGV[1])
+local windowMs = tonumber(ARGV[2])
+local maxReq = tonumber(ARGV[3])
+local state = nil
+if raw then
+    local ok, decoded = pcall(cjson.decode, raw)
+    if ok and type(decoded) == 'table' then
+        state = decoded
+    end
+end
+if not state or not state.resetAtMs or nowMs >= tonumber(state.resetAtMs) then
+    local resetAtMs = nowMs + windowMs
+    state = { count = 1, resetAtMs = resetAtMs }
+    redis.call('SET', KEYS[1], cjson.encode(state), 'PX', windowMs)
+    local allowed = (1 <= maxReq) and 1 or 0
+    local remaining = math.max(0, maxReq - 1)
+    return { allowed, 1, remaining, resetAtMs }
+end
+local nextCount = (tonumber(state.count) or 0) + 1
+local resetAtMs = tonumber(state.resetAtMs)
+state.count = nextCount
+local remMs = math.max(1, resetAtMs - nowMs)
+redis.call('SET', KEYS[1], cjson.encode(state), 'PX', remMs)
+if nextCount > maxReq then
+    return { 0, nextCount, 0, resetAtMs }
+end
+return { 1, nextCount, math.max(0, maxReq - nextCount), resetAtMs }
+`;
+
 async function executeValidateAndTouch(sessionId, nowMs, idleWindowSec, throttleSec) {
   const client = getRedisClient();
   const key = `${SESSION_PREFIX}${sessionId}`;
@@ -731,6 +807,18 @@ async function executeReleaseLock(lockKey, expectedValue) {
   return client.eval(RELEASE_LOCK_LUA, 1, lockKey, String(expectedValue));
 }
 
+async function executeConsumeRateLimit(rateKey, nowMs, windowMs, maxRequests) {
+  const client = getRedisClient();
+  return client.eval(
+    CONSUME_RATE_LIMIT_LUA,
+    1,
+    rateKey,
+    String(nowMs),
+    String(windowMs),
+    String(maxRequests)
+  );
+}
+
 module.exports = {
   getRedisClient,
   storeSession,
@@ -741,5 +829,6 @@ module.exports = {
   executeGrantElevation,
   executeRevokeSessionElevations,
   executeReleaseLock,
+  executeConsumeRateLimit,
   SESSION_PREFIX
 };

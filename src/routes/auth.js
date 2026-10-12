@@ -21,6 +21,8 @@ const { collectTravelAnomalySignal } = require('../collectors/travelCollector');
 const { collectBotSignal } = require('../collectors/botCollector');
 const { collectBaselineDeviationSignal } = require('../collectors/baselineCollector');
 
+const { VALIDATION_LIMITS } = require('../middleware/validation');
+
 const router = express.Router();
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || `${MAX_SESSION_LIFETIME_SECONDS}s`;
 
@@ -58,13 +60,18 @@ async function extractLoginRequestContext(req, explicitFingerprint = null) {
 }
 
 /**
- * POST /api/v1/auth/signup
- */
+  * POST /api/v1/auth/signup
+  */
 router.post('/signup', async (req, res) => {
   try {
     const { email, password } = req.body || {};
 
-    if (!email || typeof email !== 'string' || !EMAIL_REGEX.test(email)) {
+    if (
+      !email ||
+      typeof email !== 'string' ||
+      email.trim().length > VALIDATION_LIMITS.MAX_EMAIL_LENGTH ||
+      !EMAIL_REGEX.test(email.trim())
+    ) {
       return sendError(res, 400, 'invalid_request', 'A valid email address is required');
     }
 
@@ -74,6 +81,15 @@ router.post('/signup', async (req, res) => {
         400,
         'invalid_request',
         'Password must be at least 6 characters long'
+      );
+    }
+
+    if (password.length > VALIDATION_LIMITS.MAX_PASSWORD_LENGTH) {
+      return sendError(
+        res,
+        400,
+        'invalid_request',
+        `Password must not exceed ${VALIDATION_LIMITS.MAX_PASSWORD_LENGTH} characters`
       );
     }
 
@@ -114,6 +130,18 @@ router.post('/login', async (req, res) => {
 
     if (!email || !password || typeof email !== 'string' || typeof password !== 'string') {
       return sendError(res, 400, 'invalid_request', 'Email and password are required');
+    }
+
+    if (
+      email.trim().length > VALIDATION_LIMITS.MAX_EMAIL_LENGTH ||
+      password.length > VALIDATION_LIMITS.MAX_PASSWORD_LENGTH
+    ) {
+      return sendError(
+        res,
+        400,
+        'invalid_request',
+        'Email or password exceeds maximum allowed length'
+      );
     }
 
     // Single request arrival timestamp and canonical source identity for the request

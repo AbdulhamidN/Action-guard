@@ -1,5 +1,7 @@
 const express = require('express');
 const { authenticateToken } = require('../middleware/auth');
+const { stepUpRateLimiter, apiRateLimiter } = require('../middleware/rateLimiter');
+const { VALIDATION_LIMITS, validateIdParam } = require('../middleware/validation');
 const { Session } = require('../database/models');
 const { getLatestRiskAssessment } = require('../services/riskEngineService');
 const { sendError } = require('../utils/errors');
@@ -15,48 +17,59 @@ const router = express.Router();
  * Issues a session- and scope-bound step-up OTP challenge delivered to the user's
  * immutable registration email address.
  */
-router.post('/:id/step-up/challenge', authenticateToken, async (req, res) => {
-  try {
-    const callerId = req.user.id || req.user.user_id;
-    const requestedSessionId = req.params.id;
-    const activeSessionId = req.session?.session_id || req.user?.session_id;
-
-    if (requestedSessionId !== activeSessionId) {
-      return sendError(res, 403, 'forbidden', 'Cannot request a step-up challenge for another session');
-    }
-
-    const { scope } = req.body || {};
-    if (!scope || typeof scope !== 'string') {
-      return sendError(res, 400, 'invalid_request', 'Elevation scope is required');
-    }
-
+router.post(
+  '/:id/step-up/challenge',
+  stepUpRateLimiter,
+  validateIdParam('id'),
+  authenticateToken,
+  async (req, res) => {
     try {
-      const challenge = await issueStepUpChallenge({
-        userId: callerId,
-        sessionId: activeSessionId,
-        scope: scope.trim()
-      });
-      return res.status(200).json(challenge);
-    } catch (challengeErr) {
+      const callerId = req.user.id || req.user.user_id;
+      const requestedSessionId = req.params.id;
+      const activeSessionId = req.session?.session_id || req.user?.session_id;
+
+      if (requestedSessionId !== activeSessionId) {
+        return sendError(res, 403, 'forbidden', 'Cannot request a step-up challenge for another session');
+      }
+
+      const { scope } = req.body || {};
       if (
-        challengeErr.code === 'VERIFICATION_PROVIDER_UNAVAILABLE' ||
-        challengeErr.code === 'INVALID_VERIFICATION_KEY'
+        !scope ||
+        typeof scope !== 'string' ||
+        scope.trim().length === 0 ||
+        scope.length > VALIDATION_LIMITS.MAX_SCOPE_LENGTH
       ) {
-        return sendError(res, 501, 'verification_provider_unavailable', challengeErr.message);
+        return sendError(res, 400, 'invalid_request', 'Elevation scope is required');
       }
-      if (challengeErr.code === 'INVALID_ELEVATION_SCOPE') {
-        return sendError(res, 400, 'invalid_scope', challengeErr.message);
+
+      try {
+        const challenge = await issueStepUpChallenge({
+          userId: callerId,
+          sessionId: activeSessionId,
+          scope: scope.trim()
+        });
+        return res.status(200).json(challenge);
+      } catch (challengeErr) {
+        if (
+          challengeErr.code === 'VERIFICATION_PROVIDER_UNAVAILABLE' ||
+          challengeErr.code === 'INVALID_VERIFICATION_KEY'
+        ) {
+          return sendError(res, 501, 'verification_provider_unavailable', challengeErr.message);
+        }
+        if (challengeErr.code === 'INVALID_ELEVATION_SCOPE') {
+          return sendError(res, 400, 'invalid_scope', challengeErr.message);
+        }
+        if (challengeErr.code === 'INVALID_REQUEST') {
+          return sendError(res, 400, 'invalid_request', challengeErr.message);
+        }
+        throw challengeErr;
       }
-      if (challengeErr.code === 'INVALID_REQUEST') {
-        return sendError(res, 400, 'invalid_request', challengeErr.message);
-      }
-      throw challengeErr;
+    } catch (error) {
+      console.error('[Sessions API] Error issuing step-up challenge:', error);
+      return sendError(res, 500, 'internal_error', 'An unexpected error occurred while issuing step-up challenge');
     }
-  } catch (error) {
-    console.error('[Sessions API] Error issuing step-up challenge:', error);
-    return sendError(res, 500, 'internal_error', 'An unexpected error occurred while issuing step-up challenge');
   }
-});
+);
 
 /**
  * POST /api/v1/sessions/:id/step-up/verify
@@ -64,94 +77,110 @@ router.post('/:id/step-up/challenge', authenticateToken, async (req, res) => {
  * Verifies a step-up OTP code, signs a short-lived ES256 verification ticket,
  * and redeems it server-side to elevate the active session for the bound scope.
  */
-router.post('/:id/step-up/verify', authenticateToken, async (req, res) => {
-  try {
-    const callerId = req.user.id || req.user.user_id;
-    const requestedSessionId = req.params.id;
-    const activeSessionId = req.session?.session_id || req.user?.session_id;
-
-    if (requestedSessionId !== activeSessionId) {
-      return sendError(res, 403, 'forbidden', 'Cannot verify a step-up challenge for another session');
-    }
-
-    const { challenge_id, code, duration_seconds } = req.body || {};
-    if (!challenge_id || typeof challenge_id !== 'string') {
-      return sendError(res, 400, 'invalid_request', 'challenge_id is required');
-    }
-    if (!code || typeof code !== 'string') {
-      return sendError(res, 400, 'invalid_request', 'Verification code is required');
-    }
-
-    const context = await extractServerRequestContext(req);
-    const maxSessionExpiresAt = req.session?.max_expires_at
-      ? Number(req.session.max_expires_at)
-      : null;
-
+router.post(
+  '/:id/step-up/verify',
+  stepUpRateLimiter,
+  validateIdParam('id'),
+  authenticateToken,
+  async (req, res) => {
     try {
-      const elevation = await verifyStepUpChallenge({
-        userId: callerId,
-        sessionId: activeSessionId,
-        challengeId: challenge_id,
-        code,
-        durationSeconds: typeof duration_seconds === 'number' ? duration_seconds : undefined,
-        maxSessionExpiresAt,
-        context
-      });
-      return res.status(200).json(elevation);
-    } catch (verifyErr) {
+      const callerId = req.user.id || req.user.user_id;
+      const requestedSessionId = req.params.id;
+      const activeSessionId = req.session?.session_id || req.user?.session_id;
+
+      if (requestedSessionId !== activeSessionId) {
+        return sendError(res, 403, 'forbidden', 'Cannot verify a step-up challenge for another session');
+      }
+
+      const { challenge_id, code, duration_seconds } = req.body || {};
       if (
-        verifyErr.code === 'VERIFICATION_PROVIDER_UNAVAILABLE' ||
-        verifyErr.code === 'INVALID_VERIFICATION_KEY'
+        !challenge_id ||
+        typeof challenge_id !== 'string' ||
+        challenge_id.trim().length === 0 ||
+        challenge_id.length > VALIDATION_LIMITS.MAX_CHALLENGE_ID_LENGTH
       ) {
-        return sendError(res, 501, 'verification_provider_unavailable', verifyErr.message);
+        return sendError(res, 400, 'invalid_request', 'challenge_id is required');
       }
-      if (verifyErr.code === 'INVALID_REQUEST') {
-        return sendError(res, 400, 'invalid_request', verifyErr.message);
+      if (
+        !code ||
+        typeof code !== 'string' ||
+        code.trim().length === 0 ||
+        code.length > VALIDATION_LIMITS.MAX_OTP_CODE_LENGTH
+      ) {
+        return sendError(res, 400, 'invalid_request', 'Verification code is required');
       }
-      if (verifyErr.code === 'CHALLENGE_BINDING_MISMATCH') {
-        return sendError(res, 403, 'challenge_mismatch', verifyErr.message);
-      }
-      if (verifyErr.code === 'CHALLENGE_EXPIRED_OR_NOT_FOUND') {
-        return sendError(res, 401, 'challenge_expired', verifyErr.message);
-      }
-      if (verifyErr.code === 'VERIFICATION_FAILED_CONTAINED') {
-        return res.status(403).json({
-          error: {
-            code: 'session_contained',
-            message: verifyErr.message,
-            session_contained: Boolean(verifyErr.sessionContained),
-            account_locked: Boolean(verifyErr.accountLocked),
-            locked_until: verifyErr.lockedUntil || null,
-            retry_after_seconds: verifyErr.retryAfterSeconds || null
-          }
+
+      const context = await extractServerRequestContext(req);
+      const maxSessionExpiresAt = req.session?.max_expires_at
+        ? Number(req.session.max_expires_at)
+        : null;
+
+      try {
+        const elevation = await verifyStepUpChallenge({
+          userId: callerId,
+          sessionId: activeSessionId,
+          challengeId: challenge_id,
+          code,
+          durationSeconds: typeof duration_seconds === 'number' ? duration_seconds : undefined,
+          maxSessionExpiresAt,
+          context
         });
+        return res.status(200).json(elevation);
+      } catch (verifyErr) {
+        if (
+          verifyErr.code === 'VERIFICATION_PROVIDER_UNAVAILABLE' ||
+          verifyErr.code === 'INVALID_VERIFICATION_KEY'
+        ) {
+          return sendError(res, 501, 'verification_provider_unavailable', verifyErr.message);
+        }
+        if (verifyErr.code === 'INVALID_REQUEST') {
+          return sendError(res, 400, 'invalid_request', verifyErr.message);
+        }
+        if (verifyErr.code === 'CHALLENGE_BINDING_MISMATCH') {
+          return sendError(res, 403, 'challenge_mismatch', verifyErr.message);
+        }
+        if (verifyErr.code === 'CHALLENGE_EXPIRED_OR_NOT_FOUND') {
+          return sendError(res, 401, 'challenge_expired', verifyErr.message);
+        }
+        if (verifyErr.code === 'VERIFICATION_FAILED_CONTAINED') {
+          return res.status(403).json({
+            error: {
+              code: 'session_contained',
+              message: verifyErr.message,
+              session_contained: Boolean(verifyErr.sessionContained),
+              account_locked: Boolean(verifyErr.accountLocked),
+              locked_until: verifyErr.lockedUntil || null,
+              retry_after_seconds: verifyErr.retryAfterSeconds || null
+            }
+          });
+        }
+        if (
+          verifyErr.code === 'VERIFICATION_CODE_INVALID' ||
+          verifyErr.code === 'CHALLENGE_MAX_ATTEMPTS_EXCEEDED'
+        ) {
+          return res.status(401).json({
+            error: {
+              code: 'verification_failed',
+              message: verifyErr.message,
+              remaining_attempts:
+                typeof verifyErr.remainingAttempts === 'number' ? verifyErr.remainingAttempts : 0
+            }
+          });
+        }
+        if (
+          verifyErr.code === 'SESSION_MAX_LIFETIME_EXCEEDED' ||
+          verifyErr.code === 'SESSION_EXPIRED'
+        ) {
+          return sendError(res, 403, 'session_expired', verifyErr.message);
+        }
+        throw verifyErr;
       }
-      if (
-        verifyErr.code === 'VERIFICATION_CODE_INVALID' ||
-        verifyErr.code === 'CHALLENGE_MAX_ATTEMPTS_EXCEEDED'
-      ) {
-        return res.status(401).json({
-          error: {
-            code: 'verification_failed',
-            message: verifyErr.message,
-            remaining_attempts:
-              typeof verifyErr.remainingAttempts === 'number' ? verifyErr.remainingAttempts : 0
-          }
-        });
-      }
-      if (
-        verifyErr.code === 'SESSION_MAX_LIFETIME_EXCEEDED' ||
-        verifyErr.code === 'SESSION_EXPIRED'
-      ) {
-        return sendError(res, 403, 'session_expired', verifyErr.message);
-      }
-      throw verifyErr;
+    } catch (error) {
+      console.error('[Sessions API] Error verifying step-up challenge:', error);
+      return sendError(res, 500, 'internal_error', 'An unexpected error occurred while verifying step-up challenge');
     }
-  } catch (error) {
-    console.error('[Sessions API] Error verifying step-up challenge:', error);
-    return sendError(res, 500, 'internal_error', 'An unexpected error occurred while verifying step-up challenge');
   }
-});
+);
 
 /**
  * POST /api/v1/sessions/:id/elevate
@@ -159,24 +188,39 @@ router.post('/:id/step-up/verify', authenticateToken, async (req, res) => {
  * Requests temporary, scoped privilege elevation for the active session.
  * Requires a valid, cryptographically verified single-use verification ticket.
  */
-router.post('/:id/elevate', authenticateToken, async (req, res) => {
-  try {
-    const callerId = req.user.id || req.user.user_id;
-    const requestedSessionId = req.params.id;
-    const activeSessionId = req.session?.session_id || req.user?.session_id;
+router.post(
+  '/:id/elevate',
+  stepUpRateLimiter,
+  validateIdParam('id'),
+  authenticateToken,
+  async (req, res) => {
+    try {
+      const callerId = req.user.id || req.user.user_id;
+      const requestedSessionId = req.params.id;
+      const activeSessionId = req.session?.session_id || req.user?.session_id;
 
-    if (requestedSessionId !== activeSessionId) {
-      return sendError(res, 403, 'forbidden', 'Cannot elevate a session other than the active session');
-    }
+      if (requestedSessionId !== activeSessionId) {
+        return sendError(res, 403, 'forbidden', 'Cannot elevate a session other than the active session');
+      }
 
-    const { scope, verification_ticket, duration_seconds } = req.body || {};
-    if (!scope || typeof scope !== 'string') {
-      return sendError(res, 400, 'invalid_request', 'Elevation scope is required');
-    }
+      const { scope, verification_ticket, duration_seconds } = req.body || {};
+      if (
+        !scope ||
+        typeof scope !== 'string' ||
+        scope.trim().length === 0 ||
+        scope.length > VALIDATION_LIMITS.MAX_SCOPE_LENGTH
+      ) {
+        return sendError(res, 400, 'invalid_request', 'Elevation scope is required');
+      }
 
-    if (!verification_ticket || typeof verification_ticket !== 'string') {
-      return sendError(res, 400, 'invalid_request', 'Verification ticket is required');
-    }
+      if (
+        !verification_ticket ||
+        typeof verification_ticket !== 'string' ||
+        verification_ticket.trim().length === 0 ||
+        verification_ticket.length > VALIDATION_LIMITS.MAX_TICKET_LENGTH
+      ) {
+        return sendError(res, 400, 'invalid_request', 'Verification ticket is required');
+      }
 
     const maxSessionExpiresAt = req.session?.max_expires_at
       ? Number(req.session.max_expires_at)
@@ -234,29 +278,43 @@ router.post('/:id/elevate', authenticateToken, async (req, res) => {
  *
  * Checks elevation status for a specific scope on the active session.
  */
-router.get('/:id/elevate/:scope', authenticateToken, async (req, res) => {
-  try {
-    const callerId = req.user.id || req.user.user_id;
-    const requestedSessionId = req.params.id;
-    const activeSessionId = req.session?.session_id || req.user?.session_id;
+router.get(
+  '/:id/elevate/:scope',
+  apiRateLimiter,
+  validateIdParam('id'),
+  authenticateToken,
+  async (req, res) => {
+    try {
+      const callerId = req.user.id || req.user.user_id;
+      const requestedSessionId = req.params.id;
+      const activeSessionId = req.session?.session_id || req.user?.session_id;
 
-    if (requestedSessionId !== activeSessionId) {
-      return sendError(res, 403, 'forbidden', 'Cannot inspect elevation for another session');
+      if (requestedSessionId !== activeSessionId) {
+        return sendError(res, 403, 'forbidden', 'Cannot inspect elevation for another session');
+      }
+
+      const requestedScope = req.params.scope;
+      if (
+        !requestedScope ||
+        typeof requestedScope !== 'string' ||
+        requestedScope.length > VALIDATION_LIMITS.MAX_SCOPE_LENGTH
+      ) {
+        return sendError(res, 400, 'invalid_request', 'Invalid elevation scope parameter');
+      }
+
+      const elevationStatus = await checkElevation({
+        sessionId: activeSessionId,
+        scope: requestedScope,
+        parentSession: req.session || null
+      });
+
+      return res.status(200).json(elevationStatus);
+    } catch (error) {
+      console.error('[Sessions API] Error checking elevation:', error);
+      return sendError(res, 500, 'internal_error', 'An unexpected error occurred while checking elevation');
     }
-
-    const requestedScope = req.params.scope;
-    const elevationStatus = await checkElevation({
-      sessionId: activeSessionId,
-      scope: requestedScope,
-      parentSession: req.session || null
-    });
-
-    return res.status(200).json(elevationStatus);
-  } catch (error) {
-    console.error('[Sessions API] Error checking elevation:', error);
-    return sendError(res, 500, 'internal_error', 'An unexpected error occurred while checking elevation');
   }
-});
+);
 
 /**
  * GET /api/v1/sessions/:id
@@ -269,14 +327,19 @@ router.get('/:id/elevate/:scope', authenticateToken, async (req, res) => {
  * - trusted_device and active_restrictions are omitted (scheduled for Module 11 and Module 8).
  * - Sensitive raw attributes (IP, device fingerprint, coordinates, user_id) are never returned.
  */
-router.get('/:id', authenticateToken, async (req, res) => {
-  try {
-    const callerId = req.user.id || req.user.user_id;
-    const requestedSessionId = req.params.id;
+router.get(
+  '/:id',
+  apiRateLimiter,
+  validateIdParam('id'),
+  authenticateToken,
+  async (req, res) => {
+    try {
+      const callerId = req.user.id || req.user.user_id;
+      const requestedSessionId = req.params.id;
 
-    if (!requestedSessionId || typeof requestedSessionId !== 'string') {
-      return sendError(res, 404, 'not_found', 'Session not found');
-    }
+      if (!requestedSessionId || typeof requestedSessionId !== 'string') {
+        return sendError(res, 404, 'not_found', 'Session not found');
+      }
 
     const sessionRecord = await Session.findOne({
       where: {

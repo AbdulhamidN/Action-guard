@@ -7,6 +7,7 @@ const { authenticateToken } = require('../middleware/auth');
 const { enforce } = require('../middleware/pep');
 const { terminateAllUserSessions } = require('../services/sessionService');
 const { sendError } = require('../utils/errors');
+const { VALIDATION_LIMITS } = require('../middleware/validation');
 
 const router = express.Router();
 
@@ -75,6 +76,17 @@ function validatePasswordPayload(req) {
       message: 'current_password and a new_password of at least 8 characters are required'
     };
   }
+  if (
+    current_password.length > VALIDATION_LIMITS.MAX_PASSWORD_LENGTH ||
+    new_password.length > VALIDATION_LIMITS.MAX_PASSWORD_LENGTH
+  ) {
+    return {
+      valid: false,
+      status: 400,
+      code: 'invalid_request',
+      message: `Passwords must not exceed ${VALIDATION_LIMITS.MAX_PASSWORD_LENGTH} characters`
+    };
+  }
   if (new_password === current_password) {
     return {
       valid: false,
@@ -91,7 +103,7 @@ function validateRecoveryEmailPayload(req) {
   if (
     !recovery_email ||
     typeof recovery_email !== 'string' ||
-    recovery_email.trim().length > 255 ||
+    recovery_email.trim().length > VALIDATION_LIMITS.MAX_EMAIL_LENGTH ||
     !EMAIL_REGEX.test(recovery_email.trim())
   ) {
     return {
@@ -122,7 +134,7 @@ function validatePhonePayload(req) {
 }
 
 function validateMfaPayload(req) {
-  const { mfa_enabled } = req.body || {};
+  const { mfa_enabled, mfa_method } = req.body || {};
   if (typeof mfa_enabled !== 'boolean') {
     return {
       valid: false,
@@ -131,11 +143,24 @@ function validateMfaPayload(req) {
       message: 'mfa_enabled boolean is required'
     };
   }
+  if (
+    mfa_method !== undefined &&
+    (typeof mfa_method !== 'string' ||
+      mfa_method.trim().length === 0 ||
+      mfa_method.trim().length > 64)
+  ) {
+    return {
+      valid: false,
+      status: 400,
+      code: 'invalid_request',
+      message: 'mfa_method must be a valid string up to 64 characters'
+    };
+  }
   return { valid: true };
 }
 
 function validateHighImpactPayload(req) {
-  const { operation } = req.body || {};
+  const { operation, target_resource } = req.body || {};
   if (
     !operation ||
     typeof operation !== 'string' ||
@@ -147,6 +172,18 @@ function validateHighImpactPayload(req) {
       status: 400,
       code: 'invalid_request',
       message: 'A valid operation string is required'
+    };
+  }
+  if (
+    target_resource !== undefined &&
+    target_resource !== null &&
+    (typeof target_resource !== 'string' || target_resource.trim().length > 255)
+  ) {
+    return {
+      valid: false,
+      status: 400,
+      code: 'invalid_request',
+      message: 'target_resource must be a string up to 255 characters'
     };
   }
   return { valid: true };

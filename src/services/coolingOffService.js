@@ -201,6 +201,12 @@ async function validateAndBuildActionPayload({ actionType, rawPayload, userId })
         err.code = 'invalid_request';
         throw err;
       }
+      if (current_password.length > 256 || new_password.length > 256) {
+        const err = new Error('Passwords must not exceed 256 characters');
+        err.status = 400;
+        err.code = 'invalid_request';
+        throw err;
+      }
       if (new_password === current_password) {
         const err = new Error('new_password must be different from current_password');
         err.status = 400;

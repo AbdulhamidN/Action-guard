@@ -122,7 +122,8 @@ const REDIS_PREFIXES = Object.freeze({
   COOLING_OFF_ACTION: 'cooling_off:action:',
   COOLING_OFF_USER_INDEX: 'cooling_off:user:',
   COOLING_OFF_TOKEN_MAP: 'cooling_off:token:',
-  COOLING_OFF_LOCK: 'cooling_off:lock:'
+  COOLING_OFF_LOCK: 'cooling_off:lock:',
+  RATE_LIMIT: 'rate_limit:'
 });
 
 module.exports = {
