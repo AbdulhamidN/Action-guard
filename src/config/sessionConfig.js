@@ -124,7 +124,9 @@ const REDIS_PREFIXES = Object.freeze({
   COOLING_OFF_TOKEN_MAP: 'cooling_off:token:',
   COOLING_OFF_LOCK: 'cooling_off:lock:',
   RATE_LIMIT: 'rate_limit:',
-  EXTERNAL_EVENT_IDEMPOTENCY: 'ext_event_idem:'
+  EXTERNAL_EVENT_IDEMPOTENCY: 'ext_event_idem:',
+  WEBHOOK_DELIVERY_LOCK: 'webhook_delivery:lock:',
+  WEBHOOK_WORKER_LOCK: 'webhook_delivery:worker_lock'
 });
 
 module.exports = {

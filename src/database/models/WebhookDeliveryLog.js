@@ -62,8 +62,8 @@ module.exports = (sequelize) => {
           notNull: { msg: 'attempt_count is required' },
           isInt: { msg: 'attempt_count must be an integer' },
           min: {
-            args: [1],
-            msg: 'attempt_count must be at least 1'
+            args: [0],
+            msg: 'attempt_count must be at least 0'
           }
         }
       },
@@ -77,6 +77,35 @@ module.exports = (sequelize) => {
       },
       error_code: {
         type: DataTypes.STRING(128),
+        allowNull: true,
+        defaultValue: null
+      },
+      next_attempt_at: {
+        type: DataTypes.DATE(3),
+        allowNull: true,
+        defaultValue: DataTypes.NOW,
+        validate: {
+          isDate: { msg: 'next_attempt_at must be a valid date' }
+        }
+      },
+      last_attempt_at: {
+        type: DataTypes.DATE(3),
+        allowNull: true,
+        defaultValue: null,
+        validate: {
+          isDate: { msg: 'last_attempt_at must be a valid date' }
+        }
+      },
+      locked_at: {
+        type: DataTypes.DATE(3),
+        allowNull: true,
+        defaultValue: null,
+        validate: {
+          isDate: { msg: 'locked_at must be a valid date' }
+        }
+      },
+      locked_by: {
+        type: DataTypes.STRING(64),
         allowNull: true,
         defaultValue: null
       },
@@ -95,6 +124,15 @@ module.exports = (sequelize) => {
         validate: {
           notNull: { msg: 'created_at is required' },
           isDate: { msg: 'created_at must be a valid date' }
+        }
+      },
+      updated_at: {
+        type: DataTypes.DATE(3),
+        allowNull: false,
+        defaultValue: DataTypes.NOW,
+        validate: {
+          notNull: { msg: 'updated_at is required' },
+          isDate: { msg: 'updated_at must be a valid date' }
         }
       }
     },

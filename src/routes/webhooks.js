@@ -15,7 +15,8 @@ const {
   getWebhookEndpointById,
   updateWebhookEndpoint,
   setWebhookEndpointActiveState,
-  deleteWebhookEndpoint
+  deleteWebhookEndpoint,
+  listWebhookEndpointDeliveries
 } = require('../services/webhookEndpointService');
 
 const router = express.Router();
@@ -231,6 +232,22 @@ router.post('/', async (req, res) => {
 router.get('/', async (req, res) => {
   try {
     const result = await listWebhookEndpoints(req.query || {});
+    return res.status(200).json(result);
+  } catch (err) {
+    return handleWebhookRouteError(err, res);
+  }
+});
+
+/**
+ * GET /api/v1/webhooks/:id/deliveries
+ * List safe delivery history metadata for a specific webhook endpoint.
+ */
+router.get('/:id/deliveries', validateIdParam('id'), async (req, res) => {
+  try {
+    const result = await listWebhookEndpointDeliveries(
+      req.params.id,
+      req.query || {}
+    );
     return res.status(200).json(result);
   } catch (err) {
     return handleWebhookRouteError(err, res);

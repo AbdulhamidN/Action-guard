@@ -662,7 +662,7 @@ Every event submitted to or logged internally by ActionGuard conforms to this st
 }
 ```
 
-## 9. Webhooks — Administrative Endpoint Management (Module 11.2c Stage 1)
+## 9. Webhooks — Administrative Endpoint Management & Outbound Delivery (Module 11.2c)
 
 ### 9.1 Authorization & Rate Limiting
 
@@ -676,13 +676,13 @@ All `/api/v1/webhooks` endpoints are restricted to platform administrators and p
 
 * **Server-Generated Identifiers & Signing Secrets:** On `POST /api/v1/webhooks`, ActionGuard generates the endpoint `id` (`whk_<uuid>`) and a 256-bit cryptographically random signing secret (`whsec_<64 hex chars>`) on the server. Clients cannot supply `id`, `secret`, `signing_secret`, `encrypted_secret`, `secret_iv`, `secret_auth_tag`, or `secret_prefix`.
 * **One-Time Creation Disclosure (`signing_secret`):** The full generated `signing_secret` (`whsec_<64 hex chars>`) is returned **once and only once** in the `201 Created` response of `POST /api/v1/webhooks`, strictly after the encrypted endpoint record is persisted to the database. Receiving applications must securely store `signing_secret` upon registration to verify `X-ActionGuard-Webhook-Signature` HMAC-SHA256 signatures when outbound delivery is enabled.
-* **Strict Post-Creation Confidentiality:** Subsequent list (`GET /api/v1/webhooks`), retrieve (`GET /api/v1/webhooks/:id`), update (`PATCH /api/v1/webhooks/:id`), activate (`POST /api/v1/webhooks/:id/activate`), deactivate (`POST /api/v1/webhooks/:id/deactivate`), and delete (`DELETE /api/v1/webhooks/:id`) responses **never** return `signing_secret` (exposing only the 8-hex-character `secret_prefix`, e.g. `whsec_8f9a1b2c`). Plaintext secrets, `encrypted_secret`, `secret_iv`, `secret_auth_tag`, and encryption keys are never included in logs, audit events, delivery logs, or error responses, and no secret-retrieval endpoint exists.
-* **AES-256-GCM Encryption at Rest & Key Persistence:** The signing secret is encrypted before persistence using AES-256-GCM (`encrypted_secret`, 96-bit `secret_iv`, and 128-bit `secret_auth_tag`) backed by `WEBHOOK_SECRET_ENCRYPTION_KEY` ($\ge 32$ characters; required in both `development` and `production`, i.e. whenever `NODE_ENV !== 'test'` or `REQUIRE_WEBHOOK_ENCRYPTION_KEY=true`). Operators must keep `WEBHOOK_SECRET_ENCRYPTION_KEY` stable across application restarts and all delivery-worker processes; key rotation is not automatically performed in Stage 1. If the encryption key is missing outside `NODE_ENV=test` or invalid in any environment, registration fails closed with `503 webhook_encryption_unavailable`.
+* **Strict Post-Creation Confidentiality:** Subsequent list (`GET /api/v1/webhooks`), retrieve (`GET /api/v1/webhooks/:id`), delivery history (`GET /api/v1/webhooks/:id/deliveries`), update (`PATCH /api/v1/webhooks/:id`), activate (`POST /api/v1/webhooks/:id/activate`), deactivate (`POST /api/v1/webhooks/:id/deactivate`), and delete (`DELETE /api/v1/webhooks/:id`) responses **never** return `signing_secret` (exposing only the 8-hex-character `secret_prefix` on endpoint objects, e.g. `whsec_8f9a1b2c`). Plaintext secrets, `encrypted_secret`, `secret_iv`, `secret_auth_tag`, internal lease lock tokens (`locked_by`, `locked_at`), raw outbound request payloads, receiver response bodies, and encryption keys are never included in logs, audit events, delivery history responses, or error responses, and no secret-retrieval endpoint exists.
+* **AES-256-GCM Encryption at Rest & Key Persistence:** The signing secret is encrypted before persistence using AES-256-GCM (`encrypted_secret`, 96-bit `secret_iv`, and 128-bit `secret_auth_tag`) backed by `WEBHOOK_SECRET_ENCRYPTION_KEY` ($\ge 32$ characters; required in both `development` and `production`, i.e. whenever `NODE_ENV !== 'test'` or `REQUIRE_WEBHOOK_ENCRYPTION_KEY=true`). Operators must keep `WEBHOOK_SECRET_ENCRYPTION_KEY` stable across application restarts and all delivery-worker processes; key rotation is not automatically performed in Stage 1/2. If the encryption key is missing outside `NODE_ENV=test` or invalid in any environment, registration fails closed with `503 webhook_encryption_unavailable`.
 
 ### 9.3 Destination URL & Subscription Validation
 
 * **HTTPS Required:** `url` must be a valid URL ($\le 512$ chars) using `https://`. In `NODE_ENV=production`, `https://` is unconditionally required. For local development only (`NODE_ENV !== 'production'`), `http://` is permitted only when `ALLOW_INSECURE_HTTP_WEBHOOKS=true` is explicitly set.
-* **SSRF & Credential Hardening (Service & Model Layers):** Enforced consistently at both the service layer (`webhookEndpointService`) and the model layer (`WebhookEndpoint` validator). Destination URLs must not contain embedded credentials (`user:pass@`), URL fragments (`#...`), whitespace/control characters, single-label internal hostnames, `localhost` / `.local` / `.internal` / `.localdomain` / `.home.arpa` / `.test` / `.invalid` / `.lan` / `.corp` domains, or non-public/special-purpose IPv4 and IPv6 addresses evaluated via byte-level CIDR matching (`0.0.0.0/8`, `10.0.0.0/8`, `100.64.0.0/10`, `127.0.0.0/8`, `169.254.0.0/16`, `172.16.0.0/12`, `192.0.0.0/24`, `192.0.2.0/24`, `192.88.99.0/24`, `192.168.0.0/16`, `198.18.0.0/15`, `198.51.100.0/24`, `203.0.113.0/24`, `224.0.0.0/4`, `240.0.0.0/4`, `::/96` including `::1`, `::` and IPv4-compatible IPv6 `::127.0.0.1` / `::169.254.169.254`, IPv4-mapped `::ffff:0:0/96` for non-public IPv4, IPv4-translated `::ffff:0:0:0/96`, NAT64 `64:ff9b::/96` and `64:ff9b:1::/48`, Discard-Only `100::/64`, IETF/Teredo/Benchmarking `2001::/23`, Documentation `2001:db8::/32`, 6to4 `2002::/16`, ULA `fc00::/7`, Link-Local `fe80::/10`, Site-Local `fec0::/10`, Multicast `ff00::/8`, and any IPv6 outside Global Unicast `2000::/3`). Local targets are only permitted outside production when `ALLOW_LOCAL_WEBHOOK_TARGETS=true`. Registration-time validation does not replace delivery-time DNS resolution and IP pinning, which are mandatory for the Stage 2 outbound delivery worker.
+* **SSRF & Credential Hardening (Registration, Model & Delivery Layers):** Enforced consistently at the service layer (`webhookEndpointService`), model layer (`WebhookEndpoint` validator), and delivery-time transport layer (`webhookTransport`). Destination URLs must not contain embedded credentials (`user:pass@`), URL fragments (`#...`), whitespace/control characters, single-label internal hostnames, `localhost` / `.local` / `.internal` / `.localdomain` / `.home.arpa` / `.test` / `.invalid` / `.lan` / `.corp` domains, or non-public/special-purpose IPv4 and IPv6 addresses evaluated via byte-level CIDR matching (`0.0.0.0/8`, `10.0.0.0/8`, `100.64.0.0/10`, `127.0.0.0/8`, `169.254.0.0/16`, `172.16.0.0/12`, `192.0.0.0/24`, `192.0.2.0/24`, `192.88.99.0/24`, `192.168.0.0/16`, `198.18.0.0/15`, `198.51.100.0/24`, `203.0.113.0/24`, `224.0.0.0/4`, `240.0.0.0/4`, `::/96` including `::1`, `::` and IPv4-compatible IPv6 `::127.0.0.1` / `::169.254.169.254`, IPv4-mapped `::ffff:0:0/96` for non-public IPv4, IPv4-translated `::ffff:0:0:0/96`, NAT64 `64:ff9b::/96` and `64:ff9b:1::/48`, Discard-Only `100::/64`, IETF/Teredo/Benchmarking `2001::/23`, Documentation `2001:db8::/32`, 6to4 `2002::/16`, ULA `fc00::/7`, Link-Local `fe80::/10`, Site-Local `fec0::/10`, Multicast `ff00::/8`, and any IPv6 outside Global Unicast `2000::/3`). Local targets are only permitted outside production when `ALLOW_LOCAL_WEBHOOK_TARGETS=true`. At delivery time, `webhookTransport` resolves all DNS records (`dns.lookup(..., { all: true, verbatim: true })`), validates **every** returned IPv4/IPv6 address (rejecting mixed public/private responses), pins the TCP socket to the validated IP via a custom `lookup` callback while preserving TLS SNI (`servername`) and `Host` header verification, and blocks all `3xx` redirects.
 * **Supported Events (`subscribed_events`):** Non-empty array of unique values from `WebhookEndpoint.SUPPORTED_WEBHOOK_EVENTS`:
   * `event.processed`
   * `decision.recorded`
@@ -751,6 +751,44 @@ Response (`200 OK`):
 
 Returns `200 OK` with `{ "webhook": { ... } }` (without `signing_secret`), or `404 webhook_not_found` if no endpoint exists with `:id`.
 
+#### `GET /api/v1/webhooks/:id/deliveries` — List Endpoint Delivery History
+
+Lists safe outbound delivery log records for webhook endpoint `:id`. Requires `requireWebhookAdmin` authorization. Returns `404 webhook_not_found` if the parent webhook endpoint does not exist.
+
+Optional query parameters (unknown query parameters rejected with `400 invalid_request`):
+* `status`: `pending` | `delivered` | `failed`
+* `event_type`: `event.processed` | `decision.recorded`
+* `limit`: integer `1..100` (default `50`)
+* `offset`: integer $\ge 0$ (default `0`)
+
+Response (`200 OK`):
+
+```json
+{
+  "webhook_id": "whk_8b4e1a20-9f88-4c11-a210-4b23901a9901",
+  "deliveries": [
+    {
+      "id": "whdel_2b90c3a4-810e-4f3b-991a-7712e901cc10",
+      "webhook_id": "whk_8b4e1a20-9f88-4c11-a210-4b23901a9901",
+      "event_type": "event.processed",
+      "source_event_id": "evt_12345",
+      "status": "delivered",
+      "attempt_count": 1,
+      "http_status": 200,
+      "error_code": null,
+      "next_attempt_at": null,
+      "last_attempt_at": "2026-10-12T19:01:00.120Z",
+      "delivered_at": "2026-10-12T19:01:00.120Z",
+      "created_at": "2026-10-12T19:01:00.000Z",
+      "updated_at": "2026-10-12T19:01:00.120Z"
+    }
+  ],
+  "count": 1,
+  "total": 1
+}
+```
+*(Note: Delivery records expose only safe scheduling and outcome metadata. Signing secrets, encryption keys, internal lease tokens `locked_by` / `locked_at`, outbound request payloads, and receiver response bodies are never returned.)*
+
 #### `PATCH /api/v1/webhooks/:id` — Update Endpoint Settings
 
 Accepts at least one of `url`, `subscribed_events`, `description`, or `is_active`. Returns `200 OK` with `{ "webhook": { ... } }` (without `signing_secret`).
@@ -772,7 +810,23 @@ Response (`200 OK`):
 }
 ```
 
-### 9.5 Webhook Endpoint Error Codes
+### 9.5 Outbound Webhook Delivery & Signature Verification (Module 11.2c Stage 2)
+
+* **Asynchronous Durable Scheduling:** When `pipeline:event_processed` (`event.processed`) or `policy:decision_recorded` (`decision.recorded`) fires on the internal event bus, ActionGuard asynchronously enqueues one `WebhookDeliveryLog` row (`status='pending'`, `attempt_count=0`) per active, subscribed `WebhookEndpoint` created on or before the source event's occurrence timestamp (`uniq_webhook_delivery_idempotency` on `(webhook_id, event_type, source_event_id)` prevents duplicates). A startup and periodic reconciliation pass (`reconcileMissingWebhookEnqueues`) recovers any missing delivery rows within a bounded lookback window if the process crashed after committing `SecurityEvent`/`RiskAssessment` or `PolicyDecision` to MySQL.
+* **Request Headers & HMAC-SHA256 Signing:**
+  * `Content-Type: application/json; charset=utf-8`
+  * `User-Agent: ActionGuard-Webhook/1.0`
+  * `X-ActionGuard-Webhook-Id: whdel_<sha256_32>`
+  * `X-ActionGuard-Webhook-Event: event.processed | decision.recorded`
+  * `X-ActionGuard-Webhook-Timestamp: <unix_epoch_seconds>`
+  * `X-ActionGuard-Webhook-Signature: v1=<64_lower_hex_hmac_sha256>`
+  The signature is computed as `HMAC-SHA256(signing_secret, "${timestamp}.${rawJsonBody}")` over the exact UTF-8 request body bytes. Receivers should verify the signature in constant time and enforce a replay window against `X-ActionGuard-Webhook-Timestamp` (default tolerance $\pm 300\text{s}$).
+* **Retry & Terminal Failure Policy:**
+  * `2xx`: Marked `delivered` immediately.
+  * `408`, `429`, `5xx`, network/TLS/DNS/timeout errors: Retried up to `5` total attempts (`RETRY_DELAYS_SECONDS = [30, 120, 600, 1800]`, plus bounded positive jitter) before transitioning to terminal `failed`.
+  * Other `4xx` (`400`, `401`, `403`, `404`, `422`), `3xx` redirects (`REDIRECT_NOT_ALLOWED`), SSRF policy rejections (`SSRF_BLOCKED`), missing source records (`SOURCE_RECORD_MISSING`), deactivated endpoints (`ENDPOINT_INACTIVE`), unsubscribed events (`EVENT_UNSUBSCRIBED`), or missing endpoints (`ENDPOINT_NOT_FOUND`): Marked terminal `failed` immediately without retry.
+
+### 9.6 Webhook Endpoint Error Codes
 
 | HTTP Status | Error Code                       | Meaning                                                                          |
 | ----------- | -------------------------------- | -------------------------------------------------------------------------------- |
@@ -785,8 +839,6 @@ Response (`200 OK`):
 | 429         | `rate_limited`                   | `sensitive_action` rate limit exceeded                                           |
 | 500         | `internal_error`                 | Unexpected database or runtime failure (internal details masked)                 |
 | 503         | `webhook_encryption_unavailable` | `WEBHOOK_SECRET_ENCRYPTION_KEY` is missing outside `NODE_ENV=test` or invalid    |
-
-*(Note: Asynchronous outbound webhook delivery workers, delivery-time DNS resolution/IP pinning, and HMAC-SHA256 payload signing are scheduled for Module 11.2c Stage 2.)*
 
 ## 10. Versioning Policy
 

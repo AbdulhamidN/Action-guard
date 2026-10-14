@@ -57,29 +57,35 @@ function resolveWebhookEncryptionKey(env = process.env) {
     !isTestEnv || env.REQUIRE_WEBHOOK_ENCRYPTION_KEY === 'true';
 
   if (mustRequireExplicitKey && !isConfigured) {
-    throw new ApiError(
+    const err = new ApiError(
       503,
       'webhook_encryption_unavailable',
       'Webhook secret encryption key is not configured'
     );
+    err.reason = 'key_unconfigured';
+    throw err;
   }
 
   if (isConfigured) {
     if (typeof rawKey !== 'string') {
-      throw new ApiError(
+      const err = new ApiError(
         503,
         'webhook_encryption_unavailable',
         'Webhook secret encryption key configuration is invalid'
       );
+      err.reason = 'key_invalid';
+      throw err;
     }
 
     const trimmed = rawKey.trim();
     if (trimmed.length < MIN_RAW_KEY_LENGTH) {
-      throw new ApiError(
+      const err = new ApiError(
         503,
         'webhook_encryption_unavailable',
         'Webhook secret encryption key does not meet minimum length requirements'
       );
+      err.reason = 'key_invalid';
+      throw err;
     }
 
     // 1. Exact 64-char hex string (32 bytes)
@@ -140,11 +146,13 @@ function generateWebhookSecret() {
  */
 function encryptWebhookSecret(plaintextSecret, env = process.env) {
   if (typeof plaintextSecret !== 'string' || plaintextSecret.length === 0) {
-    throw new ApiError(
+    const err = new ApiError(
       503,
       'webhook_encryption_unavailable',
       'Unable to encrypt webhook signing secret'
     );
+    err.reason = 'invalid_secret_input';
+    throw err;
   }
 
   const key = resolveWebhookEncryptionKey(env);
@@ -170,11 +178,13 @@ function encryptWebhookSecret(plaintextSecret, env = process.env) {
     if (err instanceof ApiError) {
       throw err;
     }
-    throw new ApiError(
+    const wrapped = new ApiError(
       503,
       'webhook_encryption_unavailable',
       'Unable to encrypt webhook signing secret'
     );
+    wrapped.reason = 'encryption_failed';
+    throw wrapped;
   }
 }
 
@@ -200,11 +210,13 @@ function decryptWebhookSecret(record, env = process.env) {
     !/^[0-9a-fA-F]+$/.test(record.secret_iv) ||
     !/^[0-9a-fA-F]+$/.test(record.secret_auth_tag)
   ) {
-    throw new ApiError(
+    const err = new ApiError(
       503,
       'webhook_encryption_unavailable',
       'Stored webhook secret metadata is invalid or corrupted'
     );
+    err.reason = 'corrupted_metadata';
+    throw err;
   }
 
   const key = resolveWebhookEncryptionKey(env);
@@ -219,7 +231,9 @@ function decryptWebhookSecret(record, env = process.env) {
       authTag.length !== AUTH_TAG_BYTE_LENGTH ||
       ciphertext.length === 0
     ) {
-      throw new Error('Invalid IV, auth tag, or ciphertext length');
+      const lenErr = new Error('Invalid IV, auth tag, or ciphertext length');
+      lenErr.reason = 'corrupted_metadata';
+      throw lenErr;
     }
 
     const decipher = crypto.createDecipheriv(AES_ALGORITHM, key, iv, {
@@ -233,12 +247,187 @@ function decryptWebhookSecret(record, env = process.env) {
     if (err instanceof ApiError) {
       throw err;
     }
-    throw new ApiError(
+    const wrapped = new ApiError(
       503,
       'webhook_encryption_unavailable',
       'Unable to decrypt webhook signing secret'
     );
+    wrapped.reason = (err && err.reason) || 'decryption_failed';
+    throw wrapped;
   }
+}
+
+const DEFAULT_SIGNATURE_TOLERANCE_SECONDS = 300; // 5 minutes
+const POSITIVE_INT_STRING_REGEX = /^[1-9]\d*$/;
+const V1_SIGNATURE_REGEX = /^v1=([0-9a-f]{64})$/;
+
+/**
+ * Parses and validates a Unix epoch timestamp in seconds.
+ * Rejects non-positive, floating-point, or malformed values.
+ *
+ * @param {unknown} rawTimestamp
+ * @returns {number|null}
+ */
+function parsePositiveTimestampSeconds(rawTimestamp) {
+  if (typeof rawTimestamp === 'number') {
+    if (Number.isSafeInteger(rawTimestamp) && rawTimestamp > 0) {
+      return rawTimestamp;
+    }
+    return null;
+  }
+  if (typeof rawTimestamp === 'string') {
+    if (!POSITIVE_INT_STRING_REGEX.test(rawTimestamp)) {
+      return null;
+    }
+    const parsed = Number.parseInt(rawTimestamp, 10);
+    if (Number.isSafeInteger(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+  return null;
+}
+
+/**
+ * Computes an HMAC-SHA256 webhook signature over the exact transmitted UTF-8 body bytes.
+ *
+ * Canonical signed bytes: `ASCII(timestampSeconds) + "." + rawBodyBuffer`
+ * Output format: `v1=<64 lowercase hexadecimal characters>`
+ *
+ * @param {Buffer|string} rawBodyBuffer - Exact UTF-8 body bytes to transmit
+ * @param {string} plaintextSecret - Decrypted endpoint signing secret (`whsec_...`)
+ * @param {number|string} timestampSeconds - Positive integer Unix timestamp in seconds
+ * @returns {string} `v1=<64 lowercase hex chars>`
+ * @throws {ApiError} On invalid payload, secret, or timestamp
+ */
+function signWebhookPayload(rawBodyBuffer, plaintextSecret, timestampSeconds) {
+  let bodyBuf;
+  if (Buffer.isBuffer(rawBodyBuffer)) {
+    bodyBuf = rawBodyBuffer;
+  } else if (typeof rawBodyBuffer === 'string') {
+    bodyBuf = Buffer.from(rawBodyBuffer, 'utf8');
+  } else {
+    throw new ApiError(
+      400,
+      'invalid_webhook_payload',
+      'Webhook payload must be a UTF-8 Buffer or string'
+    );
+  }
+
+  if (typeof plaintextSecret !== 'string' || plaintextSecret.trim().length === 0) {
+    throw new ApiError(
+      400,
+      'invalid_webhook_secret',
+      'A valid non-empty signing secret is required to sign a webhook payload'
+    );
+  }
+
+  const tsSeconds = parsePositiveTimestampSeconds(timestampSeconds);
+  if (tsSeconds === null) {
+    throw new ApiError(
+      400,
+      'invalid_webhook_timestamp',
+      'Webhook timestamp must be a positive integer in Unix epoch seconds'
+    );
+  }
+
+  const hmac = crypto.createHmac('sha256', Buffer.from(plaintextSecret, 'utf8'));
+  hmac.update(`${tsSeconds}.`, 'utf8');
+  hmac.update(bodyBuf);
+  const hexDigest = hmac.digest('hex').toLowerCase();
+
+  return `v1=${hexDigest}`;
+}
+
+/**
+ * Verifies an ActionGuard webhook signature and enforces the timestamp replay window.
+ *
+ * Never logs or exposes the signing secret, and returns `false` safely on any
+ * malformed header, invalid length, out-of-window timestamp, or HMAC mismatch.
+ *
+ * @param {object} params
+ * @param {Buffer|string} params.rawBody - Exact received request body bytes
+ * @param {string} params.signatureHeader - `X-ActionGuard-Webhook-Signature` header (`v1=<64 lowercase hex>`)
+ * @param {number|string} params.timestampHeader - `X-ActionGuard-Webhook-Timestamp` header (Unix epoch seconds)
+ * @param {string} params.secret - Endpoint signing secret (`whsec_...`)
+ * @param {number} [params.toleranceSeconds=300] - Maximum allowed clock skew / replay window in seconds
+ * @param {number} [params.nowSeconds=Math.floor(Date.now() / 1000)] - Current Unix timestamp in seconds
+ * @returns {boolean} `true` if signature and timestamp are valid, `false` otherwise
+ */
+function verifyWebhookSignature(params = {}) {
+  if (!params || typeof params !== 'object') {
+    return false;
+  }
+
+  const {
+    rawBody,
+    signatureHeader,
+    timestampHeader,
+    secret,
+    toleranceSeconds = DEFAULT_SIGNATURE_TOLERANCE_SECONDS,
+    nowSeconds = Math.floor(Date.now() / 1000)
+  } = params;
+
+  let bodyBuf;
+  if (Buffer.isBuffer(rawBody)) {
+    bodyBuf = rawBody;
+  } else if (typeof rawBody === 'string') {
+    bodyBuf = Buffer.from(rawBody, 'utf8');
+  } else {
+    return false;
+  }
+
+  if (typeof secret !== 'string' || secret.trim().length === 0) {
+    return false;
+  }
+
+  if (typeof signatureHeader !== 'string') {
+    return false;
+  }
+
+  const sigMatch = V1_SIGNATURE_REGEX.exec(signatureHeader);
+  if (!sigMatch) {
+    return false;
+  }
+
+  const tsSeconds = parsePositiveTimestampSeconds(timestampHeader);
+  if (tsSeconds === null) {
+    return false;
+  }
+
+  if (
+    typeof toleranceSeconds !== 'number' ||
+    !Number.isFinite(toleranceSeconds) ||
+    toleranceSeconds < 0
+  ) {
+    return false;
+  }
+
+  if (
+    typeof nowSeconds !== 'number' ||
+    !Number.isFinite(nowSeconds) ||
+    nowSeconds <= 0
+  ) {
+    return false;
+  }
+
+  if (Math.abs(nowSeconds - tsSeconds) > toleranceSeconds) {
+    return false;
+  }
+
+  const hmac = crypto.createHmac('sha256', Buffer.from(secret, 'utf8'));
+  hmac.update(`${tsSeconds}.`, 'utf8');
+  hmac.update(bodyBuf);
+  const expectedDigest = hmac.digest();
+  const providedDigest = Buffer.from(sigMatch[1], 'hex');
+
+  if (
+    providedDigest.length !== expectedDigest.length ||
+    providedDigest.length === 0
+  ) {
+    return false;
+  }
+
+  return crypto.timingSafeEqual(providedDigest, expectedDigest);
 }
 
 module.exports = {
@@ -247,9 +436,12 @@ module.exports = {
   AUTH_TAG_BYTE_LENGTH,
   KEY_BYTE_LENGTH,
   MIN_RAW_KEY_LENGTH,
+  DEFAULT_SIGNATURE_TOLERANCE_SECONDS,
   resetEphemeralTestEncryptionKey,
   resolveWebhookEncryptionKey,
   generateWebhookSecret,
   encryptWebhookSecret,
-  decryptWebhookSecret
+  decryptWebhookSecret,
+  signWebhookPayload,
+  verifyWebhookSignature
 };

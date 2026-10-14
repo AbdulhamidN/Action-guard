@@ -1,7 +1,7 @@
 'use strict';
 
 const crypto = require('crypto');
-const { sequelize, WebhookEndpoint } = require('../database/models');
+const { sequelize, WebhookEndpoint, WebhookDeliveryLog } = require('../database/models');
 const { isPlainObject } = require('../middleware/validation');
 const { ApiError } = require('../utils/errors');
 const {
@@ -37,6 +37,10 @@ const ALLOWED_LIST_QUERY_FIELDS = Object.freeze(
   new Set(['is_active', 'limit', 'offset'])
 );
 
+const ALLOWED_DELIVERY_LIST_QUERY_FIELDS = Object.freeze(
+  new Set(['status', 'event_type', 'limit', 'offset'])
+);
+
 const SAFE_WEBHOOK_ATTRIBUTES = Object.freeze([
   'id',
   'url',
@@ -44,6 +48,22 @@ const SAFE_WEBHOOK_ATTRIBUTES = Object.freeze([
   'description',
   'secret_prefix',
   'is_active',
+  'created_at',
+  'updated_at'
+]);
+
+const SAFE_WEBHOOK_DELIVERY_ATTRIBUTES = Object.freeze([
+  'id',
+  'webhook_id',
+  'event_type',
+  'source_event_id',
+  'status',
+  'attempt_count',
+  'http_status',
+  'error_code',
+  'next_attempt_at',
+  'last_attempt_at',
+  'delivered_at',
   'created_at',
   'updated_at'
 ]);
@@ -549,19 +569,173 @@ async function deleteWebhookEndpoint(rawId, query = {}) {
   };
 }
 
+/**
+ * Formats an optional Date value to an ISO 8601 string or null.
+ *
+ * @param {unknown} val
+ * @returns {string|null}
+ */
+function formatNullableDate(val) {
+  if (val === undefined || val === null) {
+    return null;
+  }
+  const dateObj = val instanceof Date ? val : new Date(val);
+  return Number.isNaN(dateObj.getTime()) ? null : dateObj.toISOString();
+}
+
+/**
+ * Serializes a WebhookDeliveryLog record into a public, safe response object.
+ * Explicitly allowlists safe metadata attributes and never exposes signing secrets,
+ * encryption material, internal lock tokens (`locked_by`, `locked_at`), request payloads,
+ * or receiver response bodies.
+ *
+ * @param {object} deliveryRow
+ * @returns {object}
+ */
+function serializeWebhookDeliveryLog(deliveryRow) {
+  const plain =
+    deliveryRow && typeof deliveryRow.toJSON === 'function'
+      ? deliveryRow.toJSON()
+      : deliveryRow || {};
+
+  return {
+    id: plain.id,
+    webhook_id: plain.webhook_id,
+    event_type: plain.event_type,
+    source_event_id: plain.source_event_id !== undefined ? plain.source_event_id : null,
+    status: plain.status,
+    attempt_count: Number(plain.attempt_count || 0),
+    http_status:
+      plain.http_status !== undefined && plain.http_status !== null
+        ? Number(plain.http_status)
+        : null,
+    error_code: plain.error_code !== undefined ? plain.error_code : null,
+    next_attempt_at: formatNullableDate(plain.next_attempt_at),
+    last_attempt_at: formatNullableDate(plain.last_attempt_at),
+    delivered_at: formatNullableDate(plain.delivered_at),
+    created_at: formatNullableDate(plain.created_at),
+    updated_at: formatNullableDate(plain.updated_at)
+  };
+}
+
+/**
+ * Lists webhook delivery history for a specific webhook endpoint with pagination
+ * and optional status / event_type filtering.
+ *
+ * @param {string} rawId
+ * @param {object} [query={}]
+ * @returns {Promise<{ webhook_id: string, deliveries: object[], count: number, total: number }>}
+ */
+async function listWebhookEndpointDeliveries(rawId, query = {}) {
+  const id = validateWebhookEndpointId(rawId);
+  assertOnlyAllowedKeys(query, ALLOWED_DELIVERY_LIST_QUERY_FIELDS, 'Query parameters');
+
+  const where = {
+    webhook_id: id
+  };
+
+  if (query.status !== undefined) {
+    const allowedStatuses = WebhookDeliveryLog.DELIVERY_STATUSES;
+    if (typeof query.status !== 'string' || !allowedStatuses.includes(query.status)) {
+      throw new ApiError(
+        400,
+        'invalid_request',
+        `Query parameter 'status' must be one of: ${allowedStatuses.join(', ')}`
+      );
+    }
+    where.status = query.status;
+  }
+
+  if (query.event_type !== undefined) {
+    const supportedEvents = WebhookEndpoint.SUPPORTED_WEBHOOK_EVENTS;
+    if (
+      typeof query.event_type !== 'string' ||
+      !supportedEvents.includes(query.event_type)
+    ) {
+      throw new ApiError(
+        400,
+        'invalid_request',
+        `Query parameter 'event_type' must be one of: ${supportedEvents.join(', ')}`
+      );
+    }
+    where.event_type = query.event_type;
+  }
+
+  let limit = DEFAULT_LIST_LIMIT;
+  if (query.limit !== undefined) {
+    const limitStr = String(query.limit).trim();
+    if (!/^\d+$/.test(limitStr)) {
+      throw new ApiError(400, 'invalid_request', 'limit must be a positive integer');
+    }
+    const parsedLimit = Number.parseInt(limitStr, 10);
+    if (!Number.isSafeInteger(parsedLimit) || parsedLimit < 1 || parsedLimit > MAX_LIST_LIMIT) {
+      throw new ApiError(
+        400,
+        'invalid_request',
+        `limit must be an integer between 1 and ${MAX_LIST_LIMIT}`
+      );
+    }
+    limit = parsedLimit;
+  }
+
+  let offset = 0;
+  if (query.offset !== undefined) {
+    const offsetStr = String(query.offset).trim();
+    if (!/^\d+$/.test(offsetStr)) {
+      throw new ApiError(400, 'invalid_request', 'offset must be a non-negative integer');
+    }
+    const parsedOffset = Number.parseInt(offsetStr, 10);
+    if (!Number.isSafeInteger(parsedOffset) || parsedOffset < 0) {
+      throw new ApiError(400, 'invalid_request', 'offset must be a non-negative integer');
+    }
+    offset = parsedOffset;
+  }
+
+  const endpoint = await WebhookEndpoint.findByPk(id, {
+    attributes: ['id']
+  });
+
+  if (!endpoint) {
+    throw new ApiError(404, 'webhook_not_found', 'Webhook endpoint not found');
+  }
+
+  const { rows, count } = await WebhookDeliveryLog.findAndCountAll({
+    where,
+    attributes: SAFE_WEBHOOK_DELIVERY_ATTRIBUTES,
+    order: [
+      ['created_at', 'DESC'],
+      ['id', 'ASC']
+    ],
+    limit,
+    offset
+  });
+
+  const deliveries = rows.map((row) => serializeWebhookDeliveryLog(row));
+  return {
+    webhook_id: id,
+    deliveries,
+    count: deliveries.length,
+    total: count
+  };
+}
+
 module.exports = {
   SAFE_WEBHOOK_ATTRIBUTES,
+  SAFE_WEBHOOK_DELIVERY_ATTRIBUTES,
   ALLOWED_CREATE_FIELDS,
   ALLOWED_UPDATE_FIELDS,
   ALLOWED_LIST_QUERY_FIELDS,
+  ALLOWED_DELIVERY_LIST_QUERY_FIELDS,
   validateWebhookEndpointId,
   validateSubscribedEvents,
   validateWebhookDescription,
   serializeWebhookEndpoint,
+  serializeWebhookDeliveryLog,
   registerWebhookEndpoint,
   listWebhookEndpoints,
   getWebhookEndpointById,
   updateWebhookEndpoint,
   setWebhookEndpointActiveState,
-  deleteWebhookEndpoint
+  deleteWebhookEndpoint,
+  listWebhookEndpointDeliveries
 };
