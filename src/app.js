@@ -1,3 +1,5 @@
+const path = require('path');
+const fs = require('fs');
 const express = require('express');
 const helmet = require('helmet');
 const authRouter = require('./routes/auth');
@@ -10,6 +12,7 @@ const policyRouter = require('./routes/policy');
 const accountActionsRouter = require('./routes/accountActions');
 const coolingOffRouter = require('./routes/coolingOff');
 const webhooksRouter = require('./routes/webhooks');
+const adminRouter = require('./routes/admin');
 const { setDelayHandler } = require('./middleware/pep');
 const { coolingOffDelayHandler } = require('./services/coolingOffService');
 const {
@@ -29,38 +32,62 @@ const app = express();
 
 app.disable('x-powered-by');
 
-// 1. Helmet security headers
-app.use(
-  helmet({
-    contentSecurityPolicy: {
-      useDefaults: false,
-      directives: {
-        defaultSrc: ["'none'"],
-        baseUri: ["'none'"],
-        formAction: ["'none'"],
-        frameAncestors: ["'none'"],
-        objectSrc: ["'none'"]
-      }
-    },
-    crossOriginEmbedderPolicy: false,
-    crossOriginOpenerPolicy: { policy: 'same-origin' },
-    crossOriginResourcePolicy: { policy: 'same-origin' },
-    dnsPrefetchControl: { allow: false },
-    frameguard: { action: 'deny' },
-    hidePoweredBy: true,
-    hsts: {
-      maxAge: 31536000,
-      includeSubDomains: true,
-      preload: false
-    },
-    ieNoOpen: true,
-    noSniff: true,
-    originAgentCluster: true,
-    permittedCrossDomainPolicies: { permittedPolicies: 'none' },
-    referrerPolicy: { policy: 'no-referrer' },
-    xssFilter: true
-  })
-);
+// 1. Helmet security headers & dynamic CSP
+const baseHelmet = helmet({
+  contentSecurityPolicy: false,
+  crossOriginEmbedderPolicy: false,
+  crossOriginOpenerPolicy: { policy: 'same-origin' },
+  crossOriginResourcePolicy: { policy: 'same-origin' },
+  dnsPrefetchControl: { allow: false },
+  frameguard: { action: 'deny' },
+  hidePoweredBy: true,
+  hsts: {
+    maxAge: 31536000,
+    includeSubDomains: true,
+    preload: false
+  },
+  ieNoOpen: true,
+  noSniff: true,
+  originAgentCluster: true,
+  permittedCrossDomainPolicies: { permittedPolicies: 'none' },
+  referrerPolicy: { policy: 'no-referrer' },
+  xssFilter: true
+});
+
+const apiCsp = helmet.contentSecurityPolicy({
+  useDefaults: false,
+  directives: {
+    defaultSrc: ["'none'"],
+    baseUri: ["'none'"],
+    formAction: ["'none'"],
+    frameAncestors: ["'none'"],
+    objectSrc: ["'none'"]
+  }
+});
+
+const frontendCsp = helmet.contentSecurityPolicy({
+  useDefaults: false,
+  directives: {
+    defaultSrc: ["'none'"],
+    scriptSrc: ["'self'"],
+    styleSrc: ["'self'"],
+    connectSrc: ["'self'"],
+    imgSrc: ["'self'", 'data:'],
+    fontSrc: ["'self'"],
+    baseUri: ["'self'"],
+    formAction: ["'self'"],
+    frameAncestors: ["'none'"],
+    objectSrc: ["'none'"]
+  }
+});
+
+app.use(baseHelmet);
+app.use((req, res, next) => {
+  if (process.env.SERVE_FRONTEND === 'true') {
+    return frontendCsp(req, res, next);
+  }
+  return apiCsp(req, res, next);
+});
 
 // 2. Body parsing with explicit size limit (default 64kb)
 app.use(
@@ -110,5 +137,47 @@ app.use('/api/v1/cooling-off', sensitiveActionRateLimiter, coolingOffRouter);
 
 // Administrative webhook endpoint management routes
 app.use('/api/v1/webhooks', sensitiveActionRateLimiter, webhooksRouter);
+
+// Administrative dashboard and read routes
+app.use('/api/v1/admin', adminRouter);
+
+// Unknown /api route handler: returns JSON 404 for unmapped API endpoints
+app.all(/^\/api(\/.*)?$/, (req, res) => {
+  res.status(404).json({
+    error: {
+      code: 'not_found',
+      message: 'Not found',
+      status: 404
+    }
+  });
+});
+
+const frontendDistPath = path.join(__dirname, '../frontend/dist');
+
+// Production & demo: serve built frontend assets when SERVE_FRONTEND=true
+app.use((req, res, next) => {
+  if (process.env.SERVE_FRONTEND === 'true') {
+    return express.static(frontendDistPath)(req, res, next);
+  }
+  next();
+});
+
+// SPA fallback for non-API GET requests when SERVE_FRONTEND=true
+app.get('*', (req, res, next) => {
+  if (process.env.SERVE_FRONTEND === 'true') {
+    if (
+      req.path.startsWith('/api') ||
+      req.path.startsWith('/socket.io') ||
+      req.path === '/health'
+    ) {
+      return next();
+    }
+    const indexPath = path.join(frontendDistPath, 'index.html');
+    if (fs.existsSync(indexPath)) {
+      return res.sendFile(indexPath);
+    }
+  }
+  next();
+});
 
 module.exports = app;

@@ -4,9 +4,34 @@ ActionGuard is an open-source Zero Trust security platform that helps applicatio
 
 ## Getting Started
 
+### 1. Prerequisites & Services
+
 ```bash
 npm install
 docker compose up
+```
+
+### 2. Running the Backend & Frontend
+
+**Backend API & Real-Time Engine (port 3000):**
+```bash
+npm start
+# or with file watching:
+npm run dev
+```
+
+**Frontend Development Shell (Vite dev server on port 5173 with proxy to backend):**
+```bash
+npm run dev:frontend
+```
+
+**Production Build & Serving:**
+```bash
+# Build frontend bundle into frontend/dist:
+npm run build:frontend
+
+# Serve compiled SPA and backend on port 3000:
+SERVE_FRONTEND=true npm start
 ```
 
 

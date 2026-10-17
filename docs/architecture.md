@@ -330,6 +330,36 @@ Deployed via Docker Compose: one container for the Express application, one for 
 
 Independent service scaling, asynchronous/queued event processing at scale, and formalized failure-mode guarantees are documented as future architectural work, consistent with the requirements analysis.
 
+## 12. Dashboard API & Admin Session Token Architecture (Module 12a)
+
+Module 12a establishes the foundational backend API for the operator dashboard:
+* **Admin Session Token & Zero-Secret Persistence**: Administrative login (`POST /api/v1/admin/auth/login`) accepts `ACTIONGUARD_ADMIN_API_KEY` (enforcing $\ge 32$ characters) once and returns a short-lived opaque admin session token (`agadm_<32 random bytes base64url>`). The raw token is never stored in Redis (only its SHA-256 hash is persisted). The raw admin key is never accepted on administrative read endpoints.
+* **Dual TTL Lifecycles**: Tokens enforce a sliding idle TTL (30 minutes default, sliding on valid read requests) and a hard absolute cap (4 hours default) measured from token creation.
+* **Pure Payload Builders**: Real-time broadcasts (`socketServer.js`) and REST endpoints (`src/routes/admin.js`, `src/routes/me.js`, `src/routes/sessions.js`, `src/routes/risk.js`) share identical pure serialization builders from `src/realtime/payloads.js`.
+* **Zero Trust Privacy Boundary & Tier-Only Contract**: Responses to standard JWT callers strip technical numeric scores, contributing signals, rule IDs, and administrative explanations. Full details are strictly restricted to authenticated operator endpoints (`/api/v1/admin/*`).
+* **Covering Indexes & Pure SQL Aggregates**: Dashboard metrics (`GET /api/v1/admin/overview`) and user search/listing execute bounded SQL aggregates and MySQL 8 window functions without N+1 query loops, backed by migration 011 covering indexes (`idx_policy_decisions_outcome_decided_session`, `idx_risk_assessments_tier_evaluated`, `idx_sessions_active_expires_user`).
+
 ## Summary
 
 ActionGuard's actual architecture, as built, is a single self-hosted Express application with clearly separated internal modules — signal collection, correlation, risk scoring (PDP), policy decisioning (PDP), and enforcement (PEP) — backed by MySQL for persistence and Redis for fast session/sequence state, with a React dashboard for live visibility. This is a deliberately monolithic MVP: the separation that matters for the project's security claims exists at the code level today, with service-level separation and scaling as an explicit next step rather than a current property of the deployed system.
+
+## 13. Frontend Architecture & Real-Time Application Shell (Module 12b)
+
+Module 12b implements the app shell foundation, establishing a strict separation between user-facing interactions and administrative operations without weakening Zero Trust guarantees:
+
+* **Dual Shell Isolation**:
+  * **User Shell (`/app/*`)**: Authenticates via `POST /api/v1/auth/login` with validated device fingerprints. The user session JWT is held strictly in `sessionStorage` (`ag_user_token`) and cleared on logout or session revocation.
+  * **Admin Shell (`/admin/*`)**: Authenticates via `POST /api/v1/admin/auth/login` with the administrative key. The key is typed once, sent once, and immediately discarded from the DOM and component memory. The issued operator session token (`agadm_...`) is held strictly in JavaScript memory; refreshing the browser clears memory and forces re-authentication to the admin login.
+  * Neither boundary ever stores credentials in `localStorage` or URL query parameters.
+* **Real-Time Telemetry Streaming (`useLiveStream`)**:
+  * Real-time telemetry is consumed via Socket.IO client connections mounted at `/socket.io`.
+  * Stream segregation is strictly enforced: `mode === 'user'` passes strictly `auth: { token }` and receives account-scoped rooms (`user:<userId>`, `session:<sessionId>`), while `mode === 'admin'` passes strictly `auth: { adminToken }` and receives the global operator stream (`admin:stream`). The user stream never sends admin credentials, and vice versa.
+  * In-memory bounded ring buffers capture the latest 200 events (`event:recorded`, `risk:updated`, `decision:recorded`) and automatically invalidate corresponding TanStack React Query caches.
+  * Session termination (`session:terminated`) or authentication failure (`connect_error` with `unauthorized`) immediately displays an explanatory notice, purges credentials, and redirects to the login route.
+* **Dynamic Content Security Policy (CSP) & Static Serving**:
+  * When `SERVE_FRONTEND=true` is enabled, Express serves the compiled Single Page Application (`frontend/dist`) with an SPA fallback for non-API GET requests.
+  * Unmapped API routes (`/api/*`) strictly return JSON 404 responses.
+  * Helmet Content Security Policy is dynamically adjusted when `SERVE_FRONTEND=true` to permit `'self'` scripts, styles, connections, and fonts, while preserving anti-clickjacking (`frame-ancestors 'none'`) and object restrictions (`object-src 'none'`). When `SERVE_FRONTEND` is disabled, the strict API-only CSP (`default-src 'none'`) remains unconditionally in effect.
+* **DEV-Only Fingerprint Override Tree-Shaking**:
+  * To support multi-device security simulation across different browser profiles, development builds allow an explicit `localStorage` override key (`ag_fp_override`).
+  * In production builds, this override branch is eliminated at compile time via dead code elimination, ensuring that production clients strictly derive hardware visitor IDs.

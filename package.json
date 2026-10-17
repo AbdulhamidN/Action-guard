@@ -8,7 +8,9 @@
     "dev": "node --watch src/index.js",
     "test": "jest --runInBand --forceExit",
     "migrate": "node src/database/migrate.js",
-    "seed": "node src/database/seed.js"
+    "seed": "node src/database/seed.js",
+    "dev:frontend": "npm --prefix frontend run dev",
+    "build:frontend": "npm --prefix frontend run build"
   },
   "keywords": [
     "zero-trust",
