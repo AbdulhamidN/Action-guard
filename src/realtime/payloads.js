@@ -1,3 +1,5 @@
+const crypto = require('crypto');
+
 /**
  * Pure functions for building sanitized real-time broadcast payloads.
  * No I/O, no database imports, no external service or socket dependencies.
@@ -248,6 +250,18 @@ function buildEventRecordedPayload(event, assessment = null, options = {}) {
     payload.is_new_country = true;
   }
 
+  if (options && options.includeDeviceRef) {
+    let device_ref = null;
+    const rawFp =
+      event.device_fingerprint ||
+      (event.context && (event.context.device_fingerprint || event.context.fingerprint)) ||
+      null;
+    if (rawFp && typeof rawFp === 'string') {
+      device_ref = crypto.createHash('sha256').update(rawFp).digest('hex').slice(0, 12);
+    }
+    payload.device_ref = device_ref;
+  }
+
   return payload;
 }
 
@@ -353,10 +367,238 @@ function buildAdminDecisionPayload(decisionRecord) {
   };
 }
 
+/**
+ * Builds user-facing session payload.
+ *
+ * @param {object} session
+ * @param {boolean} [isCurrent=false]
+ * @param {object|null} [latestAssessment=null]
+ * @returns {{
+ *   session_id: string|null,
+ *   created_at: string,
+ *   expires_at: string,
+ *   is_active: boolean,
+ *   is_current: boolean,
+ *   risk_tier: string|null
+ * }}
+ */
+function buildUserSessionPayload(session, isCurrent = false, latestAssessment = null) {
+  if (!session || typeof session !== 'object') {
+    throw new TypeError('session is required to build user session payload');
+  }
+
+  if (typeof isCurrent === 'object' && isCurrent !== null) {
+    latestAssessment = isCurrent;
+    isCurrent = false;
+  }
+
+  const createdAt =
+    session.created_at instanceof Date
+      ? session.created_at.toISOString()
+      : session.created_at
+      ? String(session.created_at)
+      : new Date().toISOString();
+
+  const expiresAt =
+    session.expires_at instanceof Date
+      ? session.expires_at.toISOString()
+      : session.expires_at
+      ? String(session.expires_at)
+      : new Date().toISOString();
+
+  const riskTier = latestAssessment && latestAssessment.risk_tier ? latestAssessment.risk_tier : null;
+
+  return {
+    session_id: session.id || session.session_id || null,
+    created_at: createdAt,
+    expires_at: expiresAt,
+    is_active: Boolean(session.is_active),
+    is_current: Boolean(isCurrent),
+    risk_tier: riskTier
+  };
+}
+
+/**
+ * Builds admin-facing session payload.
+ *
+ * @param {object} session
+ * @param {object|null} [latestAssessment=null]
+ * @returns {{
+ *   session_id: string|null,
+ *   user_id: string|null,
+ *   created_at: string,
+ *   expires_at: string,
+ *   is_active: boolean,
+ *   risk_tier: string|null,
+ *   risk_score: number|null,
+ *   evaluated_at: string|null
+ * }}
+ */
+function buildAdminSessionPayload(session, latestAssessment = null, eventOrMeta = null) {
+  if (!session || typeof session !== 'object') {
+    throw new TypeError('session is required to build admin session payload');
+  }
+
+  const createdAt =
+    session.created_at instanceof Date
+      ? session.created_at.toISOString()
+      : session.created_at
+      ? String(session.created_at)
+      : new Date().toISOString();
+
+  const expiresAt =
+    session.expires_at instanceof Date
+      ? session.expires_at.toISOString()
+      : session.expires_at
+      ? String(session.expires_at)
+      : new Date().toISOString();
+
+  const riskTier = latestAssessment && latestAssessment.risk_tier ? latestAssessment.risk_tier : null;
+  const riskScore =
+    latestAssessment && typeof latestAssessment.risk_score === 'number'
+      ? latestAssessment.risk_score
+      : null;
+
+  let evaluatedAt = null;
+  if (latestAssessment && latestAssessment.evaluated_at) {
+    evaluatedAt =
+      latestAssessment.evaluated_at instanceof Date
+        ? latestAssessment.evaluated_at.toISOString()
+        : String(latestAssessment.evaluated_at);
+  }
+
+  let deviceRef = null;
+  let coarseLocation = null;
+
+  if (eventOrMeta) {
+    const rawFp =
+      eventOrMeta.device_fingerprint ||
+      (eventOrMeta.context && (eventOrMeta.context.device_fingerprint || eventOrMeta.context.fingerprint)) ||
+      null;
+    if (rawFp && typeof rawFp === 'string') {
+      deviceRef = crypto.createHash('sha256').update(rawFp).digest('hex').slice(0, 12);
+    }
+
+    const ctx = eventOrMeta.context || {};
+    if (ctx.geo_country || ctx.geo_region) {
+      coarseLocation = {
+        country: ctx.geo_country || null,
+        region: ctx.geo_region || null
+      };
+    }
+  }
+
+  return {
+    session_id: session.id || session.session_id || null,
+    user_id: session.user_id || session.userId || null,
+    created_at: createdAt,
+    expires_at: expiresAt,
+    is_active: Boolean(session.is_active),
+    risk_tier: riskTier,
+    risk_score: riskScore,
+    evaluated_at: evaluatedAt,
+    device_ref: deviceRef,
+    coarse_location: coarseLocation
+  };
+}
+
+/**
+ * Builds user-facing risk history item.
+ *
+ * @param {object} assessment
+ * @returns {{
+ *   event_id: string|null,
+ *   session_id: string|null,
+ *   risk_tier: string,
+ *   evaluated_at: string
+ * }}
+ */
+function buildUserRiskHistoryItem(assessment) {
+  if (!assessment || typeof assessment !== 'object') {
+    throw new TypeError('assessment is required to build user risk history item');
+  }
+
+  const evaluatedAt =
+    assessment.evaluated_at instanceof Date
+      ? assessment.evaluated_at.toISOString()
+      : assessment.evaluated_at
+      ? String(assessment.evaluated_at)
+      : new Date().toISOString();
+
+  return {
+    event_id: assessment.event_id || assessment.eventId || null,
+    session_id:
+      assessment.session_id !== undefined ? assessment.session_id : assessment.sessionId !== undefined ? assessment.sessionId : null,
+    risk_tier: assessment.risk_tier || 'low',
+    evaluated_at: evaluatedAt
+  };
+}
+
+/**
+ * Builds admin-facing sequence payload.
+ *
+ * @param {object} sequence
+ * @returns {object}
+ */
+function buildAdminSequencePayload(sequence) {
+  if (!sequence || typeof sequence !== 'object') {
+    throw new TypeError('sequence is required to build admin sequence payload');
+  }
+
+  const startedAt =
+    sequence.started_at instanceof Date
+      ? sequence.started_at.toISOString()
+      : sequence.started_at
+      ? String(sequence.started_at)
+      : new Date().toISOString();
+
+  const lastEventAt =
+    sequence.last_event_at instanceof Date
+      ? sequence.last_event_at.toISOString()
+      : sequence.last_event_at
+      ? String(sequence.last_event_at)
+      : new Date().toISOString();
+
+  const events = Array.isArray(sequence.sequenceEvents)
+    ? sequence.sequenceEvents.map((se) => {
+        const ev = se.securityEvent;
+        const ts =
+          ev && ev.timestamp
+            ? ev.timestamp instanceof Date
+              ? ev.timestamp.toISOString()
+              : String(ev.timestamp)
+            : null;
+
+        return {
+          event_id: ev ? ev.event_id : se.event_id,
+          session_id: ev ? ev.session_id : null,
+          event_type: ev ? ev.event_type : null,
+          step_order: typeof se.step_order === 'number' ? se.step_order : 1,
+          timestamp: ts,
+          action_sensitivity: (ev && ev.metadata && ev.metadata.action_sensitivity) || null
+        };
+      })
+    : [];
+
+  return {
+    id: sequence.id,
+    user_id: sequence.user_id || sequence.userId || null,
+    session_id: sequence.session_id || sequence.sessionId || null,
+    started_at: startedAt,
+    last_event_at: lastEventAt,
+    event_count: typeof sequence.event_count === 'number' ? sequence.event_count : events.length,
+    events
+  };
+}
+
 module.exports = {
   buildUserRiskPayload,
   buildAdminRiskPayload,
   buildEventRecordedPayload,
   buildUserDecisionPayload,
-  buildAdminDecisionPayload
+  buildAdminDecisionPayload,
+  buildUserSessionPayload,
+  buildAdminSessionPayload,
+  buildUserRiskHistoryItem,
+  buildAdminSequencePayload
 };

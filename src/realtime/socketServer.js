@@ -3,6 +3,7 @@ const { Server } = require('socket.io');
 const eventBus = require('../events/eventBus');
 const { verifyUserAndSessionToken } = require('../middleware/auth');
 const sessionService = require('../services/sessionService');
+const adminTokenService = require('../services/adminTokenService');
 const {
   buildUserRiskPayload,
   buildAdminRiskPayload,
@@ -54,14 +55,21 @@ function initSocketServer(httpServer, options = {}) {
   // Handshake authentication middleware
   io.use(async (socket, next) => {
     // 1. Reject credentials passed in query string
-    if (socket.handshake.query && (socket.handshake.query.token !== undefined || socket.handshake.query.apiKey !== undefined)) {
+    if (
+      socket.handshake.query &&
+      (socket.handshake.query.token !== undefined ||
+        socket.handshake.query.apiKey !== undefined ||
+        socket.handshake.query.adminToken !== undefined ||
+        socket.handshake.query.admin_token !== undefined)
+    ) {
       return next(new Error('unauthorized'));
     }
 
     const auth = socket.handshake.auth || {};
 
-    // 2. Reject if both apiKey and token are supplied
-    if (auth.apiKey !== undefined && auth.token !== undefined) {
+    // 2. Reject if not exactly one credential type is supplied
+    const suppliedCreds = [auth.apiKey, auth.token, auth.adminToken].filter((c) => c !== undefined);
+    if (suppliedCreds.length !== 1) {
       return next(new Error('unauthorized'));
     }
 
@@ -90,7 +98,29 @@ function initSocketServer(httpServer, options = {}) {
       return next();
     }
 
-    // 4. User authentication path (auth.token)
+    // 4. Admin token authentication path (auth.adminToken)
+    if (auth.adminToken !== undefined) {
+      if (typeof auth.adminToken !== 'string' || !auth.adminToken.startsWith(adminTokenService.TOKEN_PREFIX)) {
+        return next(new Error('unauthorized'));
+      }
+
+      try {
+        const record = await adminTokenService.validateAdminToken(auth.adminToken, { touch: false });
+        if (!record) {
+          return next(new Error('unauthorized'));
+        }
+
+        socket.data.isAdmin = true;
+        socket.data.authType = 'adminToken';
+        socket.data.adminToken = auth.adminToken;
+        return next();
+      } catch (err) {
+        console.warn('[SocketServer] Error validating adminToken during handshake:', err.message);
+        return next(new Error('unauthorized'));
+      }
+    }
+
+    // 5. User authentication path (auth.token)
     if (!auth.token || typeof auth.token !== 'string') {
       return next(new Error('unauthorized'));
     }
@@ -155,7 +185,7 @@ function initSocketServer(httpServer, options = {}) {
       '30',
     10
   );
-  const intervalMs = Math.max(1, intervalSeconds) * 1000;
+  const intervalMs = options.revalidationIntervalMs || Math.max(1, intervalSeconds) * 1000;
 
   revalidationInterval = setInterval(async () => {
     if (!ioInstance) return;
@@ -163,7 +193,19 @@ function initSocketServer(httpServer, options = {}) {
       const sockets = await ioInstance.fetchSockets();
       let redisErrorLoggedThisTick = false;
       for (const s of sockets) {
-        if (s.data && !s.data.isAdmin && s.data.user && s.data.user.session_id) {
+        if (s.data && s.data.isAdmin && s.data.authType === 'adminToken' && s.data.adminToken) {
+          try {
+            const valid = await adminTokenService.validateAdminToken(s.data.adminToken, { touch: false });
+            if (!valid) {
+              s.disconnect(true);
+            }
+          } catch (err) {
+            if (!redisErrorLoggedThisTick) {
+              console.warn('[SocketServer] Admin token revalidation error during tick:', err.message);
+              redisErrorLoggedThisTick = true;
+            }
+          }
+        } else if (s.data && !s.data.isAdmin && s.data.user && s.data.user.session_id) {
           try {
             const activeSession = await sessionService.validateActiveSession(s.data.user.session_id, { touch: false });
             if (!activeSession) {

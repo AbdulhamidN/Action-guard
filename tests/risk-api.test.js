@@ -23,20 +23,19 @@ const riskEngineService = require('../src/services/riskEngineService');
 const geoService = require('../src/services/geoService');
 const travelCollector = require('../src/collectors/travelCollector');
 
-function assertRiskInvariant(result) {
+function assertTierOnlyContract(result) {
   expect(result).toBeDefined();
-  expect(Number.isInteger(result.risk_score || result.current_risk_score)).toBe(true);
-  const score = result.risk_score !== undefined ? result.risk_score : result.current_risk_score;
-  const tier = result.risk_tier;
-  expect(score).toBeGreaterThanOrEqual(0);
-  expect(score).toBeLessThanOrEqual(100);
+  expect(['low', 'medium', 'high', 'critical']).toContain(result.risk_tier);
+  expect(typeof result.evaluated_at).toBe('string');
+  expect(new Date(result.evaluated_at).getTime()).not.toBeNaN();
+  expect(result.explanation).toBeDefined();
+  expect(typeof result.explanation.user_facing).toBe('string');
 
-  // Exact arithmetic invariant: sum of weights === risk_score
-  const computedSum = result.contributing_signals.reduce((acc, s) => acc + s.weight, 0);
-  expect(computedSum).toBe(score);
-
-  // Tier consistency
-  expect(tierForScore(score)).toBe(tier);
+  // Removed fields must not be present in tier-only contract
+  expect(result.risk_score).toBeUndefined();
+  expect(result.current_risk_score).toBeUndefined();
+  expect(result.contributing_signals).toBeUndefined();
+  expect(result.explanation.admin_facing).toBeUndefined();
 }
 
 describe('Module 6.4 — Risk API Endpoints, Ownership Checks & Demo Scenarios', () => {
@@ -304,7 +303,7 @@ describe('Module 6.4 — Risk API Endpoints, Ownership Checks & Demo Scenarios',
         })
         .expect(200);
 
-      assertRiskInvariant(cleanRes.body);
+      assertTierOnlyContract(cleanRes.body);
 
       // Record a real recovery_email_change 1 minute ago
       await recordSecurityEvent({
@@ -329,13 +328,13 @@ describe('Module 6.4 — Risk API Endpoints, Ownership Checks & Demo Scenarios',
         })
         .expect(200);
 
-      assertRiskInvariant(cascadeRes.body);
+      assertTierOnlyContract(cascadeRes.body);
 
-      // Must score higher due to seq_rapid_credential_cascade
-      expect(cascadeRes.body.risk_score).toBeGreaterThan(cleanRes.body.risk_score);
-      const cascadeRule = cascadeRes.body.contributing_signals.find((s) => s.signal === 'seq_rapid_credential_cascade');
-      expect(cascadeRule).toBeDefined();
-      expect(cascadeRule.weight).toBe(20);
+      // Tier-only contract assertions
+      expect(cascadeRes.body.risk_tier).toBe('medium');
+      expect(cascadeRes.body.risk_score).toBeUndefined();
+      expect(cascadeRes.body.contributing_signals).toBeUndefined();
+      expect(cascadeRes.body.explanation.admin_facing).toBeUndefined();
 
       // Evaluated_at must be recent, ignoring the 2020 client timestamp
       const evalYear = new Date(cascadeRes.body.evaluated_at).getFullYear();
@@ -376,15 +375,15 @@ describe('Module 6.4 — Risk API Endpoints, Ownership Checks & Demo Scenarios',
 
       expect(res.body).toEqual({
         status: 'unavailable',
-        risk_score: null,
         risk_tier: null,
-        contributing_signals: [],
         error_code: 'risk_evaluation_failed',
         explanation: {
-          user_facing: 'Security risk evaluation is temporarily unavailable.',
-          admin_facing: 'Risk engine failed to evaluate context: risk_evaluation_failed.'
+          user_facing: 'Security risk evaluation is temporarily unavailable.'
         }
       });
+      expect(res.body.risk_score).toBeUndefined();
+      expect(res.body.contributing_signals).toBeUndefined();
+      expect(res.body.explanation.admin_facing).toBeUndefined();
 
       evalSpy.mockRestore();
       errSpy.mockRestore();
@@ -404,11 +403,14 @@ describe('Module 6.4 — Risk API Endpoints, Ownership Checks & Demo Scenarios',
       expect(resUnscored.body.expires_at).toBeDefined();
       expect(resUnscored.body.is_active).toBe(true);
       expect(resUnscored.body.risk).toEqual({
-        current_risk_score: null,
         risk_tier: null,
-        contributing_signals: null,
-        evaluated_at: null
+        evaluated_at: null,
+        explanation: {
+          user_facing: ''
+        }
       });
+      expect(resUnscored.body.risk.current_risk_score).toBeUndefined();
+      expect(resUnscored.body.risk.contributing_signals).toBeUndefined();
 
       // 2. Record an event in sessionA1 to generate an assessment
       await recordSecurityEvent({
@@ -424,12 +426,11 @@ describe('Module 6.4 — Risk API Endpoints, Ownership Checks & Demo Scenarios',
         .expect(200);
 
       expect(resScored.body.session_id).toBe(sessionA1.id);
-      expect(resScored.body.risk.current_risk_score).toBeDefined();
-      expect(resScored.body.risk.risk_tier).toBeDefined();
-      expect(Array.isArray(resScored.body.risk.contributing_signals)).toBe(true);
-      expect(resScored.body.risk.evaluated_at).toBeDefined();
-
-      assertRiskInvariant(resScored.body.risk);
+      assertTierOnlyContract(resScored.body.risk);
+      expect(resScored.body.risk.current_risk_score).toBeUndefined();
+      expect(resScored.body.risk.risk_score).toBeUndefined();
+      expect(resScored.body.risk.contributing_signals).toBeUndefined();
+      expect(resScored.body.risk.explanation.admin_facing).toBeUndefined();
     });
   });
 
@@ -516,7 +517,9 @@ describe('Module 6.4 — Risk API Endpoints, Ownership Checks & Demo Scenarios',
 
       const riskState = sessionRes.body.risk;
       expect(riskState.risk_tier).toBe('low');
-      assertRiskInvariant(riskState);
+      assertTierOnlyContract(riskState);
+      expect(riskState.current_risk_score).toBeUndefined();
+      expect(riskState.contributing_signals).toBeUndefined();
     });
   });
 
@@ -616,12 +619,14 @@ describe('Module 6.4 — Risk API Endpoints, Ownership Checks & Demo Scenarios',
         .expect(200);
 
       const riskState = sessionRes.body.risk;
-      assertRiskInvariant(riskState);
+      assertTierOnlyContract(riskState);
 
-      // Verify critical tier and score
+      // Verify critical tier and removal of score/signals/admin_facing
       expect(riskState.risk_tier).toBe('critical');
-      expect(riskState.current_risk_score).toBeGreaterThanOrEqual(80);
-      expect(riskState.current_risk_score).toBe(84);
+      expect(riskState.current_risk_score).toBeUndefined();
+      expect(riskState.risk_score).toBeUndefined();
+      expect(riskState.contributing_signals).toBeUndefined();
+      expect(riskState.explanation.admin_facing).toBeUndefined();
     });
   });
 });

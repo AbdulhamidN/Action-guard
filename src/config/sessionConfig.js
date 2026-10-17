@@ -153,7 +153,8 @@ const REDIS_PREFIXES = Object.freeze({
   RATE_LIMIT: 'rate_limit:',
   EXTERNAL_EVENT_IDEMPOTENCY: 'ext_event_idem:',
   WEBHOOK_DELIVERY_LOCK: 'webhook_delivery:lock:',
-  WEBHOOK_WORKER_LOCK: 'webhook_delivery:worker_lock'
+  WEBHOOK_WORKER_LOCK: 'webhook_delivery:worker_lock',
+  ADMIN_TOKEN: 'admin_token:'
 });
 
 module.exports = {

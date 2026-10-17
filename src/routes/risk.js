@@ -137,35 +137,30 @@ router.post('/evaluate', authenticateToken, async (req, res) => {
     if (!result || result.status === 'unavailable') {
       return res.status(503).json({
         status: 'unavailable',
-        risk_score: null,
         risk_tier: null,
-        contributing_signals: [],
         error_code: 'risk_evaluation_failed',
-        explanation: result?.explanation || {
-          user_facing: 'Security risk evaluation is temporarily unavailable.',
-          admin_facing: 'Risk engine failed to evaluate context: risk_evaluation_failed.'
+        explanation: {
+          user_facing:
+            result?.explanation?.user_facing || 'Security risk evaluation is temporarily unavailable.'
         }
       });
     }
 
     return res.status(200).json({
-      risk_score: result.risk_score,
       risk_tier: result.risk_tier,
-      contributing_signals: result.contributing_signals,
-      explanation: result.explanation,
-      evaluated_at: serverTimestamp.toISOString()
+      evaluated_at: serverTimestamp.toISOString(),
+      explanation: {
+        user_facing: result.explanation?.user_facing || ''
+      }
     });
   } catch (error) {
     console.error('[Risk API] Error evaluating proposed event risk:', error);
     return res.status(503).json({
       status: 'unavailable',
-      risk_score: null,
       risk_tier: null,
-      contributing_signals: [],
       error_code: 'risk_evaluation_failed',
       explanation: {
-        user_facing: 'Security risk evaluation is temporarily unavailable.',
-        admin_facing: 'Risk engine failed to evaluate context: risk_evaluation_failed.'
+        user_facing: 'Security risk evaluation is temporarily unavailable.'
       }
     });
   }

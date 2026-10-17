@@ -149,37 +149,29 @@ Request body:
 }
 ```
 
-Success response (`200 OK`):
+Success response (`200 OK` — Tier-Only Contract for JWT Callers):
 
 ```json
 {
-  "risk_score": 84,
   "risk_tier": "critical",
-  "contributing_signals": [
-    { "signal": "base_action_password_change", "category": "base_action", "weight": 20 },
-    { "signal": "action_sensitivity_critical", "category": "base_action", "weight": 5 },
-    { "signal": "seq_rapid_credential_cascade", "category": "sequence", "weight": 20 }
-  ],
+  "evaluated_at": "2026-10-09T14:00:00.000Z",
   "explanation": {
-    "user_facing": "Elevated risk pattern observed across multiple security indicators. Administrative review or re-authentication may be required.",
-    "admin_facing": "Risk score 84 (tier: critical). Contributing signals: base_action_password_change (+20), action_sensitivity_critical (+5), seq_rapid_credential_cascade (+20)."
-  },
-  "evaluated_at": "2026-10-09T14:00:00.000Z"
+    "user_facing": "Elevated risk pattern observed across multiple security indicators. Administrative review or re-authentication may be required."
+  }
 }
 ```
+
+*Note on Privacy & Oracle Prevention:* For JWT callers, numeric `risk_score`, `contributing_signals`, and `admin_facing` explanations are stripped to prevent model inversion and oracle probing. Full score, signals breakdown, and administrative explanations are restricted strictly to authenticated admin endpoints (`/api/v1/admin/*`).
 
 Unavailable response (`503 Service Unavailable`):
 
 ```json
 {
   "status": "unavailable",
-  "risk_score": null,
   "risk_tier": null,
-  "contributing_signals": [],
   "error_code": "risk_evaluation_failed",
   "explanation": {
-    "user_facing": "Security risk evaluation is temporarily unavailable.",
-    "admin_facing": "Risk engine failed to evaluate context: risk_evaluation_failed."
+    "user_facing": "Security risk evaluation is temporarily unavailable."
   }
 }
 ```
@@ -282,7 +274,7 @@ Retrieves session metadata and current evaluated risk state for an active or clo
 * **Privacy:** Raw client IP, device fingerprint, geographic coordinates, and user IDs are never returned.
 * **Omissions:** `trusted_device` and `active_restrictions` are omitted from the MVP response (scheduled for Module 11 and Module 8).
 
-Example response (session with risk assessment):
+Example response (session with risk assessment — Tier-Only Contract):
 
 ```json
 {
@@ -291,16 +283,11 @@ Example response (session with risk assessment):
   "expires_at": "2026-09-26T09:15:00.000Z",
   "is_active": true,
   "risk": {
-    "current_risk_score": 68,
     "risk_tier": "high",
-    "contributing_signals": [
-      {
-        "signal": "base_action_login_success",
-        "category": "base_action",
-        "weight": 5
-      }
-    ],
-    "evaluated_at": "2026-09-26T09:00:00.000Z"
+    "evaluated_at": "2026-09-26T09:00:00.000Z",
+    "explanation": {
+      "user_facing": "Activity from an unfamiliar device or location was observed."
+    }
   }
 }
 ```
@@ -314,10 +301,11 @@ Example response (session without risk assessment yet):
   "expires_at": "2026-09-26T17:00:00.000Z",
   "is_active": true,
   "risk": {
-    "current_risk_score": null,
     "risk_tier": null,
-    "contributing_signals": null,
-    "evaluated_at": null
+    "evaluated_at": null,
+    "explanation": {
+      "user_facing": ""
+    }
   }
 }
 ```
@@ -1064,6 +1052,71 @@ Broadcast to `admin:stream`:
   The client socket receives `session:terminated` **before** the transport disconnect event fires.
 * **Token Expiration Disconnection:** User sockets establish an unreferenced one-shot timer upon connection matching the JWT's `exp` claim. Sockets automatically disconnect when the token expires.
 * **Periodic Revalidation:** A background interval revalidates all connected user sockets against active Redis sessions every `SOCKET_SESSION_REVALIDATION_INTERVAL_SECONDS` (default: 30 seconds). Sockets whose Redis session has expired or been revoked are forcefully disconnected.
+
+## 12. User Read Endpoints (`/api/v1/me/*` — Module 12a)
+
+Protected endpoints allowing authenticated users (`authenticateToken`) to inspect their own security history, active sessions, and policy decisions. All payloads reuse the pure sanitization builders from `src/realtime/payloads.js` and enforce the tier-only contract.
+
+* `GET /api/v1/me/sessions`: Returns array of user-facing session objects (`buildUserSessionPayload`) containing `session_id`, `created_at`, `expires_at`, `is_active`, `is_current`, and latest evaluated `risk_tier` (omits score and technical signals).
+* `GET /api/v1/me/events?limit&before`: Returns array of security events owned by the authenticated caller (`buildEventRecordedPayload` without `user_id`). Validates pagination (`limit` default 50, max 200; `before` ISO 8601).
+* `GET /api/v1/me/risk-history?session_id&limit&before`: Returns array of risk evaluations for the caller (`buildUserRiskHistoryItem` with `event_id`, `session_id`, `risk_tier`, `evaluated_at`). If `session_id` is passed, strictly enforces session ownership (`404 not_found` if not owned).
+* `GET /api/v1/me/decisions?limit&before`: Returns array of policy decisions applied to the caller (`buildUserDecisionPayload` with `decision_id`, `event_id`, `session_id`, `action_type`, `decision`, `enforcement_outcome`, `risk_tier`, `decided_at`, `explanation.user_facing`).
+
+## 13. Admin Dashboard & Management API (`/api/v1/admin/*` — Module 12a)
+
+Dedicated administrative API powering the ActionGuard Operator Dashboard. Enforces short-lived opaque admin session tokens (`requireAdminToken`), tiered rate limiting (`authRateLimiter`, `apiRateLimiter`), and fail-closed key validation.
+
+### 13.1 Admin Authentication & Session Token Lifecycle
+
+* **POST `/api/v1/admin/auth/login`**:
+  * **Rate Limiting:** `authRateLimiter` (10 req/min).
+  * **Body:** `{ "admin_key": "<ACTIONGUARD_ADMIN_API_KEY>" }`.
+  * **Key Requirements:** Requires `ACTIONGUARD_ADMIN_API_KEY` to be configured with $\ge 32$ characters. If unconfigured or shorter, login is disabled fail-closed with generic `401 unauthorized` without leaking key state. Constant-time comparison (`crypto.timingSafeEqual`) on equal-length SHA-256 buffers.
+  * **Response (`200 OK`):** `{ "admin_token": "agadm_<32 random bytes base64url>", "expires_at": "<ISO8601>" }`.
+  * **Storage & Privacy:** The raw admin token is **never** stored in Redis. Only its SHA-256 hash (`admin_token:<hash>`) is persisted. The raw token is typed once at login and never accepted by `/admin/*` read endpoints (neither via `Authorization: Bearer` nor `X-Admin-Api-Key`).
+  * **Sliding Idle TTL & Absolute Cap:** Sliding idle timeout defaults to 30 minutes (`ADMIN_TOKEN_IDLE_TTL_SECONDS`), refreshed upon valid read requests. An absolute lifetime cap defaults to 4 hours (`ADMIN_TOKEN_MAX_LIFETIME_SECONDS`) and is strictly enforced regardless of activity.
+* **POST `/api/v1/admin/auth/logout`**:
+  * Protected by `requireAdminToken`. Revokes the token hash immediately from Redis.
+
+### 13.2 Admin Read Endpoints (`requireAdminToken` & `apiRateLimiter`)
+
+* **GET `/api/v1/admin/users?search&limit&offset`**:
+  * Returns paginated users: `{ users: [...], total: number }`.
+  * `search`: Case-insensitive prefix search on `email`. LIKE wildcards (`%`, `_`, `\`) are strictly sanitized.
+  * Each user includes `id`, `email`, `created_at`, `locked_until`, `latest_risk_tier`, `latest_risk_at`, and `active_sessions`.
+  * Evaluated via bounded SQL aggregates and MySQL 8 window functions without N+1 query loops.
+* **GET `/api/v1/admin/users/:id/events?limit&before`**: Returns user security events with admin detail including `user_id` and opaque `device_ref` (first 12 hex characters of SHA-256 of fingerprint). Raw `ip_address`, `device_fingerprint`, `user_agent`, and coordinates are strictly excluded (`404 not_found` if user does not exist).
+* **GET `/api/v1/admin/users/:id/risk-history?limit&before`**: Returns full admin risk evaluations including numeric `risk_score`, `contributing_signals`, and `admin_facing` explanations (`404 not_found` if user does not exist).
+* **GET `/api/v1/admin/users/:id/decisions?limit&before`**: Returns full admin policy decisions (`buildAdminDecisionPayload`) with rule IDs, reasons, and raw enforcement outcomes.
+* **GET `/api/v1/admin/users/:id/sessions`**: Returns user sessions with full administrative risk scores, evaluated timestamps, active statuses, `device_ref`, and `coarse_location: { country, region }` (`buildAdminSessionPayload`). Raw IP addresses, device fingerprints, user agents, and coordinates are strictly omitted.
+* **GET `/api/v1/admin/users/:id/sequence`**: Returns the active action sequence for the user with ordered events (`buildAdminSequencePayload`), or `200 OK` with `{ "sequence": null }` if none exists.
+* **GET `/api/v1/admin/policy`**: Returns active policy summary and rules from `getActivePolicy()`.
+* **GET `/api/v1/admin/overview?window=24h`**:
+  * Window parameter: supports duration strings up to 7 days (e.g. `1h`, `24h`, `7d`). Default: `24h`.
+  * Returns dashboard metrics computed purely inside the database engine via SQL aggregates (`COUNT`, `GROUP BY`, `UNION`):
+    ```json
+    {
+      "window": "24h",
+      "window_start": "2026-10-14T20:00:00.000Z",
+      "window_end": "2026-10-15T20:00:00.000Z",
+      "decisions_by_outcome": {
+        "allow": 120,
+        "monitor": 84,
+        "reverify": 82,
+        "delay": 132,
+        "block": 60,
+        "contained_and_blocked": 24
+      },
+      "assessments_by_tier": {
+        "low": 150,
+        "medium": 45,
+        "high": 12,
+        "critical": 3
+      },
+      "active_sessions": 42,
+      "contained_sessions": 24
+    }
+    ```
 
 ## Summary
 

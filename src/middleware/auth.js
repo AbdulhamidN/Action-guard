@@ -3,8 +3,49 @@ const jwt = require('jsonwebtoken');
 const { sendError } = require('../utils/errors');
 const { validateAndTouchSession } = require('../services/sessionService');
 const { checkElevation } = require('../services/elevationService');
+const adminTokenService = require('../services/adminTokenService');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'dev_fallback_secret_for_actionguard_local';
+const TEST_JWT_SECRET_FALLBACK = 'test-jwt-secret-actionguard-automated-tests-32char';
+const JWT_SECRET =
+  process.env.NODE_ENV === 'test'
+    ? (process.env.JWT_SECRET || TEST_JWT_SECRET_FALLBACK)
+    : process.env.JWT_SECRET;
+
+/**
+ * Returns the active JWT signing/verification secret.
+ * Outside automated test mode (NODE_ENV !== 'test'), requires process.env.JWT_SECRET
+ * with no hardcoded fallback.
+ */
+function getJwtSecret() {
+  if (process.env.JWT_SECRET) {
+    return process.env.JWT_SECRET;
+  }
+  if (process.env.NODE_ENV === 'test') {
+    return TEST_JWT_SECRET_FALLBACK;
+  }
+  return JWT_SECRET;
+}
+
+/**
+ * Validates that required application secrets are present and meet minimum
+ * entropy / length requirements. Invoked strictly at process startup (index.js).
+ * Never prints secret values in error messages.
+ *
+ * @param {object} [env=process.env]
+ */
+function assertRequiredSecrets(env = process.env) {
+  if (env.NODE_ENV === 'test') {
+    return;
+  }
+  const secret = env.JWT_SECRET;
+  if (!secret || typeof secret !== 'string' || secret.trim().length === 0) {
+    throw new Error('JWT_SECRET environment variable is required and must not be empty.');
+  }
+  if (secret.length < 32) {
+    throw new Error(`JWT_SECRET must be at least 32 characters in length (received ${secret.length} characters).`);
+  }
+}
+
 const MIN_ADMIN_API_KEY_LENGTH = 32;
 
 /**
@@ -50,7 +91,7 @@ async function verifyUserAndSessionToken(token, options = {}) {
 
   let decoded;
   try {
-    decoded = jwt.verify(token, JWT_SECRET);
+    decoded = jwt.verify(token, getJwtSecret());
   } catch (err) {
     if (err.name === 'TokenExpiredError') {
       const error = new Error('Authorization token has expired');
@@ -253,13 +294,102 @@ function authenticateAdminApiKey(req, res, next) {
   next();
 }
 
+/**
+ * Verifies short-lived opaque admin session token (`agadm_...`).
+ * Strictly rejects:
+ * - Credentials in query parameters
+ * - Raw ACTIONGUARD_ADMIN_API_KEY (Bearer or X-Admin-Api-Key)
+ * - User JWTs
+ * - Expired or revoked tokens
+ * Slides idle TTL upon valid read request.
+ */
+async function requireAdminToken(req, res, next) {
+  if (
+    req.query &&
+    (req.query.apiKey !== undefined ||
+      req.query.api_key !== undefined ||
+      req.query.admin_key !== undefined ||
+      req.query.adminToken !== undefined ||
+      req.query.admin_token !== undefined ||
+      req.query.token !== undefined)
+  ) {
+    return sendError(res, 401, 'unauthorized', 'Credentials in query parameters are not permitted');
+  }
+
+  // Reject X-Admin-Api-Key on admin token read routes
+  if (req.headers['x-admin-api-key'] !== undefined) {
+    return sendError(res, 401, 'unauthorized', 'Raw admin API key is not permitted on this endpoint');
+  }
+
+  const authHeader = req.headers['authorization'];
+  if (!authHeader || typeof authHeader !== 'string') {
+    return sendError(res, 401, 'unauthorized', 'Missing authorization token');
+  }
+
+  const parts = authHeader.split(' ');
+  if (parts.length !== 2 || parts[0] !== 'Bearer' || !parts[1]) {
+    return sendError(
+      res,
+      401,
+      'unauthorized',
+      'Malformed authorization token. Expected Bearer <admin_token>'
+    );
+  }
+
+  const provided = parts[1];
+
+  // 1. Check if provided matches the raw ACTIONGUARD_ADMIN_API_KEY
+  const configuredAdminKey = process.env.ACTIONGUARD_ADMIN_API_KEY;
+  if (constantTimeKeyMatch(provided, configuredAdminKey)) {
+    return sendError(res, 401, 'unauthorized', 'Raw admin API key is not permitted on this endpoint');
+  }
+
+  // 2. Reject user JWTs
+  if (provided.startsWith('ey') || provided.split('.').length === 3) {
+    return sendError(res, 401, 'unauthorized', 'User tokens are not permitted on admin endpoints');
+  }
+
+  // 3. Must have admin token prefix
+  if (!provided.startsWith(adminTokenService.TOKEN_PREFIX)) {
+    return sendError(res, 401, 'unauthorized', 'Invalid admin token');
+  }
+
+  // 4. Validate token against Redis with sliding idle TTL
+  try {
+    const record = await adminTokenService.validateAdminToken(provided, { touch: true });
+    if (!record) {
+      return sendError(res, 401, 'unauthorized', 'Invalid or expired admin token');
+    }
+
+    req.admin = {
+      isAdmin: true,
+      tokenHash: record.token_hash,
+      expires_at: record.expires_at
+    };
+    req.adminToken = provided;
+    next();
+  } catch (err) {
+    console.error('[AuthMiddleware] Error validating admin token:', err.message);
+    return sendError(res, 503, 'service_unavailable', 'Authentication service temporarily unavailable');
+  }
+}
+
 module.exports = {
   authenticateToken,
   authenticateApiKey,
   authenticateAdminApiKey,
+  requireAdminToken,
   constantTimeKeyMatch,
   requireElevation,
   verifyUserAndSessionToken,
-  JWT_SECRET,
+  assertRequiredSecrets,
+  getJwtSecret,
+  JWT_SECRET: getJwtSecret(),
   MIN_ADMIN_API_KEY_LENGTH
 };
+
+Object.defineProperty(module.exports, 'JWT_SECRET', {
+  get: () => getJwtSecret(),
+  enumerable: true,
+  configurable: true
+});

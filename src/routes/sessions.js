@@ -56,6 +56,16 @@ router.post(
         ) {
           return sendError(res, 501, 'verification_provider_unavailable', challengeErr.message);
         }
+        if (challengeErr.code === 'CHALLENGE_LIMITED') {
+          res.set('Retry-After', String(challengeErr.retryAfterSeconds || 30));
+          return res.status(429).json({
+            error: {
+              code: 'challenge_limited',
+              message: challengeErr.message,
+              retry_after_seconds: challengeErr.retryAfterSeconds
+            }
+          });
+        }
         if (challengeErr.code === 'INVALID_ELEVATION_SCOPE') {
           return sendError(res, 400, 'invalid_scope', challengeErr.message);
         }
@@ -357,19 +367,24 @@ router.get(
 
     const risk = latestAssessment
       ? {
-          current_risk_score: latestAssessment.risk_score,
           risk_tier: latestAssessment.risk_tier,
-          contributing_signals: latestAssessment.contributing_signals || [],
           evaluated_at:
             latestAssessment.evaluated_at instanceof Date
               ? latestAssessment.evaluated_at.toISOString()
-              : new Date(latestAssessment.evaluated_at).toISOString()
+              : new Date(latestAssessment.evaluated_at).toISOString(),
+          explanation: {
+            user_facing:
+              latestAssessment.explanation && typeof latestAssessment.explanation.user_facing === 'string'
+                ? latestAssessment.explanation.user_facing
+                : ''
+          }
         }
       : {
-          current_risk_score: null,
           risk_tier: null,
-          contributing_signals: null,
-          evaluated_at: null
+          evaluated_at: null,
+          explanation: {
+            user_facing: ''
+          }
         };
 
     return res.status(200).json({
