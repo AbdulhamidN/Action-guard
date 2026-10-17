@@ -59,7 +59,9 @@ const { evaluateBaselineDeviationForUser } = require('./baselineDeviationService
 async function deriveNoveltyFlags(userId, eventTimestamp, currentEventId = null, fingerprint = null, country = null) {
   const result = {
     is_new_device: false,
-    is_new_country: false
+    is_new_country: false,
+    has_prior_login: false,
+    has_prior_device: false
   };
 
   if (!userId) {
@@ -89,6 +91,8 @@ async function deriveNoveltyFlags(userId, eventTimestamp, currentEventId = null,
     return result;
   }
 
+  result.has_prior_login = true;
+
   // Device novelty check
   const trimmedFingerprint = typeof fingerprint === 'string' ? fingerprint.trim() : null;
   if (trimmedFingerprint) {
@@ -101,7 +105,9 @@ async function deriveNoveltyFlags(userId, eventTimestamp, currentEventId = null,
       limit: 1
     });
 
-    if (!priorMatchingDevice) {
+    if (priorMatchingDevice) {
+      result.has_prior_device = true;
+    } else {
       result.is_new_device = true;
     }
   }

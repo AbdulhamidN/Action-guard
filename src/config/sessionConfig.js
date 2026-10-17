@@ -65,6 +65,26 @@ function loadAndValidateSessionConfig(env = process.env) {
     900,
     'ACCOUNT_LOCK_DURATION_SECONDS'
   );
+  const stepUpCooldownSeconds = parsePositiveInt(
+    env.STEP_UP_COOLDOWN_SECONDS,
+    30,
+    'STEP_UP_COOLDOWN_SECONDS'
+  );
+  const stepUpWindowSeconds = parsePositiveInt(
+    env.STEP_UP_WINDOW_SECONDS,
+    600,
+    'STEP_UP_WINDOW_SECONDS'
+  );
+  const stepUpSessionScopeMax = parsePositiveInt(
+    env.STEP_UP_SESSION_SCOPE_MAX,
+    3,
+    'STEP_UP_SESSION_SCOPE_MAX'
+  );
+  const stepUpUserMax = parsePositiveInt(
+    env.STEP_UP_USER_MAX,
+    6,
+    'STEP_UP_USER_MAX'
+  );
 
   if (idleTimeoutSeconds > maxSessionLifetimeSeconds) {
     throw new Error(
@@ -87,7 +107,11 @@ function loadAndValidateSessionConfig(env = process.env) {
     VERIFICATION_TICKET_TTL_SECONDS: verificationTicketTtlSeconds,
     STEP_UP_CHALLENGE_TTL_SECONDS: stepUpChallengeTtlSeconds,
     STEP_UP_MAX_ATTEMPTS: stepUpMaxAttempts,
-    ACCOUNT_LOCK_DURATION_SECONDS: accountLockDurationSeconds
+    ACCOUNT_LOCK_DURATION_SECONDS: accountLockDurationSeconds,
+    STEP_UP_COOLDOWN_SECONDS: stepUpCooldownSeconds,
+    STEP_UP_WINDOW_SECONDS: stepUpWindowSeconds,
+    STEP_UP_SESSION_SCOPE_MAX: stepUpSessionScopeMax,
+    STEP_UP_USER_MAX: stepUpUserMax
   });
 }
 
@@ -118,6 +142,9 @@ const REDIS_PREFIXES = Object.freeze({
   SESSION_ELEVATIONS_INDEX: 'session_elevations:',
   TICKET_CLAIM: 'ticket_used:',
   STEP_UP_CHALLENGE: 'step_up_challenge:',
+  STEP_UP_COOLDOWN: 'step_up_limit:cooldown:',
+  STEP_UP_SESSION_SCOPE: 'step_up_limit:session_scope:',
+  STEP_UP_USER: 'step_up_limit:user:',
   ACCOUNT_LOCK: 'account_lock:',
   COOLING_OFF_ACTION: 'cooling_off:action:',
   COOLING_OFF_USER_INDEX: 'cooling_off:user:',
@@ -139,6 +166,10 @@ module.exports = {
   STEP_UP_CHALLENGE_TTL_SECONDS: validated.STEP_UP_CHALLENGE_TTL_SECONDS,
   STEP_UP_MAX_ATTEMPTS: validated.STEP_UP_MAX_ATTEMPTS,
   ACCOUNT_LOCK_DURATION_SECONDS: validated.ACCOUNT_LOCK_DURATION_SECONDS,
+  STEP_UP_COOLDOWN_SECONDS: validated.STEP_UP_COOLDOWN_SECONDS,
+  STEP_UP_WINDOW_SECONDS: validated.STEP_UP_WINDOW_SECONDS,
+  STEP_UP_SESSION_SCOPE_MAX: validated.STEP_UP_SESSION_SCOPE_MAX,
+  STEP_UP_USER_MAX: validated.STEP_UP_USER_MAX,
   ALLOWLISTED_ELEVATION_SCOPES,
   ACTION_ELEVATION_SCOPE_MAP,
   REDIS_PREFIXES,

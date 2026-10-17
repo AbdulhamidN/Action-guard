@@ -139,7 +139,7 @@ describe('Module 11.1 — Stage 1: Production Security Hardening', () => {
     await request(app)
       .post(`/api/v1/sessions/${testSession.sessionId}/step-up/challenge`)
       .set('Authorization', `Bearer ${validToken}`)
-      .send({ scope: 'credential_change' })
+      .send({ scope: 'sensitive_action' })
       .expect(200);
     const stepUp3 = await request(app)
       .post(`/api/v1/sessions/${testSession.sessionId}/step-up/challenge`)

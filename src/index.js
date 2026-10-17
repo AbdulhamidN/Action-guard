@@ -1,3 +1,6 @@
+const { assertRequiredSecrets } = require('./middleware/auth');
+assertRequiredSecrets();
+
 const http = require('http');
 const app = require('./app');
 const {

@@ -13,8 +13,13 @@ const {
   STEP_UP_CHALLENGE_TTL_SECONDS,
   STEP_UP_MAX_ATTEMPTS,
   ALLOWLISTED_ELEVATION_SCOPES,
-  REDIS_PREFIXES
+  REDIS_PREFIXES,
+  STEP_UP_COOLDOWN_SECONDS,
+  STEP_UP_WINDOW_SECONDS,
+  STEP_UP_SESSION_SCOPE_MAX,
+  STEP_UP_USER_MAX
 } = require('../config/sessionConfig');
+const { executeCheckStepUpChallengeLimits } = require('../storage/redis');
 
 let ephemeralDevTestKeyPair = null;
 const testChallengeOutbox = new Map();
@@ -265,6 +270,61 @@ function hashChallengeCode({ salt, challengeId, sessionId, scope, code }) {
 }
 
 /**
+ * Atomically evaluates and consumes step-up challenge rate limits across:
+ * (a) 30s cooldown per session+scope
+ * (b) <= 3 challenges per 10 minutes per session+scope
+ * (c) <= 6 challenges per 10 minutes per user across sessions
+ *
+ * @param {object} params
+ * @param {string} params.userId
+ * @param {string} params.sessionId
+ * @param {string} params.scope
+ * @returns {Promise<{ allowed: boolean, reason: string, retryAfterSeconds: number, message?: string }>}
+ */
+async function checkStepUpLimits({ userId, sessionId, scope }) {
+  const cooldownKey = `${REDIS_PREFIXES.STEP_UP_COOLDOWN}${sessionId}:${scope}`;
+  const sessionScopeKey = `${REDIS_PREFIXES.STEP_UP_SESSION_SCOPE}${sessionId}:${scope}`;
+  const userKey = `${REDIS_PREFIXES.STEP_UP_USER}${userId}`;
+
+  const res = await executeCheckStepUpChallengeLimits({
+    cooldownKey,
+    sessionScopeKey,
+    userKey,
+    cooldownSec: STEP_UP_COOLDOWN_SECONDS,
+    windowSec: STEP_UP_WINDOW_SECONDS,
+    sessionScopeMax: STEP_UP_SESSION_SCOPE_MAX,
+    userMax: STEP_UP_USER_MAX
+  });
+
+  const [allowedNum, reason, retryAfter] = res;
+  const isAllowed = Number(allowedNum) === 1;
+  const retryAfterSec = Number(retryAfter) || 1;
+
+  if (!isAllowed) {
+    let message = 'Step-up challenge limit exceeded. Please try again later.';
+    if (reason === 'cooldown') {
+      message = `Please wait ${retryAfterSec} second(s) before requesting another step-up challenge for this scope.`;
+    } else if (reason === 'session_scope_limit') {
+      message = `Too many step-up challenges requested for this session and scope. Please retry in ${retryAfterSec} second(s).`;
+    } else if (reason === 'user_limit') {
+      message = `Too many step-up challenges requested across your sessions. Please retry in ${retryAfterSec} second(s).`;
+    }
+    return {
+      allowed: false,
+      reason,
+      retryAfterSeconds: retryAfterSec,
+      message
+    };
+  }
+
+  return {
+    allowed: true,
+    reason: 'ok',
+    retryAfterSeconds: 0
+  };
+}
+
+/**
  * Issues a single-use, session- and scope-bound step-up OTP challenge delivered
  * to the user's immutable registration email address.
  *
@@ -302,6 +362,20 @@ async function issueStepUpChallenge({ userId, sessionId, scope, now = new Date()
   if (!user || !user.email) {
     const err = new Error('User registration email not found');
     err.code = 'USER_NOT_FOUND';
+    throw err;
+  }
+
+  const limitCheck = await checkStepUpLimits({
+    userId,
+    sessionId,
+    scope: normalizedScope
+  });
+  if (!limitCheck.allowed) {
+    const err = new Error(limitCheck.message);
+    err.code = 'CHALLENGE_LIMITED';
+    err.status = 429;
+    err.retryAfterSeconds = limitCheck.retryAfterSeconds;
+    err.reason = limitCheck.reason;
     throw err;
   }
 
@@ -644,8 +718,10 @@ function getTestChallengeRecord(challengeId) {
 module.exports = {
   issueStepUpChallenge,
   verifyStepUpChallenge,
+  checkStepUpLimits,
   resolveLocalStepUpKeys,
   getTestChallengeOtp,
   getTestChallengeRecord,
+  testChallengeOutbox,
   maskEmail
 };

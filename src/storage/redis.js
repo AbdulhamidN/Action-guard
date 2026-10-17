@@ -493,6 +493,74 @@ class InMemoryRedisClient {
       return [1, nextCount, Math.max(0, maxReq - nextCount), resetAtMs];
     }
 
+    if (script.includes('-- ATOMIC_CHECK_STEP_UP_CHALLENGE_LIMITS')) {
+      const cooldownKey = keys[0];
+      const sessionScopeKey = keys[1];
+      const userKey = keys[2];
+
+      const cooldownSec = Number(argv[0]);
+      const windowSec = Number(argv[1]);
+      const sessionScopeMax = Number(argv[2]);
+      const userMax = Number(argv[3]);
+
+      // 1. Check cooldown
+      const cooldownVal = this._getSync(cooldownKey);
+      if (cooldownVal !== null) {
+        let ttl = this._ttlSync(cooldownKey);
+        if (ttl < 1) ttl = 1;
+        return [0, 'cooldown', ttl];
+      }
+
+      // 2. Check session+scope limit
+      const sessionScopeRaw = this._getSync(sessionScopeKey);
+      const sessionScopeCount = sessionScopeRaw ? Number(sessionScopeRaw) : 0;
+      if (sessionScopeCount >= sessionScopeMax) {
+        let ttl = this._ttlSync(sessionScopeKey);
+        if (ttl < 1) ttl = 1;
+        return [0, 'session_scope_limit', ttl];
+      }
+
+      // 3. Check user limit
+      const userRaw = this._getSync(userKey);
+      const userCount = userRaw ? Number(userRaw) : 0;
+      if (userCount >= userMax) {
+        let ttl = this._ttlSync(userKey);
+        if (ttl < 1) ttl = 1;
+        return [0, 'user_limit', ttl];
+      }
+
+      // 4. Apply changes atomically
+      this._setSync(cooldownKey, '1', 'EX', cooldownSec);
+
+      const nextSessionScope = sessionScopeCount + 1;
+      if (sessionScopeCount === 0) {
+        this._setSync(sessionScopeKey, String(nextSessionScope), 'EX', windowSec);
+      } else {
+        const remainingTtl = this._ttlSync(sessionScopeKey);
+        this._setSync(
+          sessionScopeKey,
+          String(nextSessionScope),
+          'EX',
+          remainingTtl > 0 ? remainingTtl : windowSec
+        );
+      }
+
+      const nextUser = userCount + 1;
+      if (userCount === 0) {
+        this._setSync(userKey, String(nextUser), 'EX', windowSec);
+      } else {
+        const remainingTtl = this._ttlSync(userKey);
+        this._setSync(
+          userKey,
+          String(nextUser),
+          'EX',
+          remainingTtl > 0 ? remainingTtl : windowSec
+        );
+      }
+
+      return [1, 'ok', 0];
+    }
+
     throw new Error('Unsupported Lua script in InMemoryRedisClient mock');
   }
 
@@ -836,6 +904,79 @@ async function executeConsumeRateLimit(rateKey, nowMs, windowMs, maxRequests) {
   );
 }
 
+const CHECK_STEP_UP_CHALLENGE_LIMITS_LUA = `
+-- ATOMIC_CHECK_STEP_UP_CHALLENGE_LIMITS
+local cooldownKey = KEYS[1]
+local sessionScopeKey = KEYS[2]
+local userKey = KEYS[3]
+
+local cooldownSec = tonumber(ARGV[1])
+local windowSec = tonumber(ARGV[2])
+local sessionScopeMax = tonumber(ARGV[3])
+local userMax = tonumber(ARGV[4])
+
+-- 1. Check cooldown
+if redis.call('EXISTS', cooldownKey) == 1 then
+    local ttl = redis.call('TTL', cooldownKey)
+    if ttl < 1 then ttl = 1 end
+    return { 0, 'cooldown', ttl }
+end
+
+-- 2. Check session+scope limit
+local sessionScopeCount = tonumber(redis.call('GET', sessionScopeKey) or '0')
+if sessionScopeCount >= sessionScopeMax then
+    local ttl = redis.call('TTL', sessionScopeKey)
+    if ttl < 1 then ttl = 1 end
+    return { 0, 'session_scope_limit', ttl }
+end
+
+-- 3. Check user limit
+local userCount = tonumber(redis.call('GET', userKey) or '0')
+if userCount >= userMax then
+    local ttl = redis.call('TTL', userKey)
+    if ttl < 1 then ttl = 1 end
+    return { 0, 'user_limit', ttl }
+end
+
+-- 4. Apply changes atomically
+redis.call('SET', cooldownKey, '1', 'EX', cooldownSec)
+
+local newSessionScope = redis.call('INCR', sessionScopeKey)
+if newSessionScope == 1 then
+    redis.call('EXPIRE', sessionScopeKey, windowSec)
+end
+
+local newUser = redis.call('INCR', userKey)
+if newUser == 1 then
+    redis.call('EXPIRE', userKey, windowSec)
+end
+
+return { 1, 'ok', 0 }
+`;
+
+async function executeCheckStepUpChallengeLimits({
+  cooldownKey,
+  sessionScopeKey,
+  userKey,
+  cooldownSec,
+  windowSec,
+  sessionScopeMax,
+  userMax
+}) {
+  const client = getRedisClient();
+  return client.eval(
+    CHECK_STEP_UP_CHALLENGE_LIMITS_LUA,
+    3,
+    cooldownKey,
+    sessionScopeKey,
+    userKey,
+    String(cooldownSec),
+    String(windowSec),
+    String(sessionScopeMax),
+    String(userMax)
+  );
+}
+
 module.exports = {
   getRedisClient,
   storeSession,
@@ -847,5 +988,7 @@ module.exports = {
   executeRevokeSessionElevations,
   executeReleaseLock,
   executeConsumeRateLimit,
+  executeCheckStepUpChallengeLimits,
+  CHECK_STEP_UP_CHALLENGE_LIMITS_LUA,
   SESSION_PREFIX
 };

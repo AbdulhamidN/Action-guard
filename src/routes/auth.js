@@ -3,7 +3,8 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const { User } = require('../database/models');
 const { sendError } = require('../utils/errors');
-const { JWT_SECRET, authenticateToken } = require('../middleware/auth');
+const { JWT_SECRET, getJwtSecret, authenticateToken } = require('../middleware/auth');
+const { deriveNoveltyFlags } = require('../services/riskEngineService');
 const {
   createSession,
   invalidateSession,
@@ -164,36 +165,9 @@ router.post('/login', async (req, res) => {
 
     const user = await User.findOne({ where: { email: normalizedEmail } });
     if (!user) {
-      // Generic error - do not reveal if email exists
+      // Run dummy compare for consistent timing against user enumeration
+      await bcrypt.compare(password, '$2b$10$abcdefghijklmnopqrstuuABCDEFGHIJKLMNOPQRSTUVWXYZ01234');
       return sendError(res, 401, 'authentication_failed', 'Invalid email or password');
-    }
-
-    const { checkAccountLock } = require('../services/containmentService');
-    const lockStatus = await checkAccountLock(user, currentTimestamp);
-    if (lockStatus.locked) {
-      const loginContext = await extractLoginRequestContext(req, validFingerprint);
-      const lockedMetadata = {
-        reason: 'account_temporarily_locked',
-        locked_until: lockStatus.lockedUntil
-      };
-      if (botSignal) {
-        lockedMetadata.bot_detection = botSignal;
-      }
-      await recordSecurityEvent({
-        userId: user.id,
-        eventType: 'login_failed',
-        timestamp: currentTimestamp,
-        context: loginContext,
-        metadata: lockedMetadata
-      });
-      return res.status(403).json({
-        error: {
-          code: 'account_temporarily_locked',
-          message: 'Account is temporarily locked due to suspicious security activity. Please try again later.',
-          retry_after_seconds: lockStatus.remainingSeconds,
-          locked_until: lockStatus.lockedUntil
-        }
-      });
     }
 
     const isMatch = await bcrypt.compare(password, user.password_hash);
@@ -212,6 +186,42 @@ router.post('/login', async (req, res) => {
       });
       // Generic error - do not reveal password was wrong
       return sendError(res, 401, 'authentication_failed', 'Invalid email or password');
+    }
+
+    const { checkAccountLock } = require('../services/containmentService');
+    const lockStatus = await checkAccountLock(user, currentTimestamp);
+    if (lockStatus.locked) {
+      let isRecognizedDevice = false;
+      if (validFingerprint) {
+        const novelty = await deriveNoveltyFlags(user.id, currentTimestamp, null, validFingerprint, null);
+        isRecognizedDevice = Boolean(novelty.has_prior_device);
+      }
+
+      if (!isRecognizedDevice) {
+        const loginContext = await extractLoginRequestContext(req, validFingerprint);
+        const lockedMetadata = {
+          reason: 'account_temporarily_locked',
+          locked_until: lockStatus.lockedUntil
+        };
+        if (botSignal) {
+          lockedMetadata.bot_detection = botSignal;
+        }
+        await recordSecurityEvent({
+          userId: user.id,
+          eventType: 'login_failed',
+          timestamp: currentTimestamp,
+          context: loginContext,
+          metadata: lockedMetadata
+        });
+        return res.status(403).json({
+          error: {
+            code: 'account_temporarily_locked',
+            message: 'Account is temporarily locked due to suspicious security activity. Please try again later.',
+            retry_after_seconds: lockStatus.remainingSeconds,
+            locked_until: lockStatus.lockedUntil
+          }
+        });
+      }
     }
 
     let deviceData = null;
@@ -289,7 +299,8 @@ router.post('/login', async (req, res) => {
       session_id: session.sessionId
     };
 
-    const token = jwt.sign(tokenPayload, JWT_SECRET, {
+    const tokenSecret = typeof getJwtSecret === 'function' ? getJwtSecret() : JWT_SECRET;
+    const token = jwt.sign(tokenPayload, tokenSecret, {
       expiresIn: JWT_EXPIRES_IN
     });
 

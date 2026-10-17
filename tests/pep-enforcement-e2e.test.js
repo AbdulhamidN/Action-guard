@@ -417,13 +417,28 @@ describe('Module 10b — PEP End-to-End Enforcement, Containment, Account Lock &
       .set('Authorization', `Bearer ${token}`)
       .expect(401);
 
-    // 2. Login with valid credentials while locked returns 403 account_temporarily_locked
+    // 2a. Wrong password while locked returns generic 401 without revealing lock status
+    const wrongPwRes = await request(app)
+      .post('/api/v1/auth/login')
+      .send({ email: user.email, password: 'WrongPassword123!' })
+      .expect(401);
+    expect(wrongPwRes.body.error.code).toBe('authentication_failed');
+
+    // 2b. Login with valid credentials and unrecognized device while locked returns 403 account_temporarily_locked
     const lockedLoginRes = await request(app)
       .post('/api/v1/auth/login')
       .send({ email: user.email, password: plainPassword })
       .expect(403);
     expect(lockedLoginRes.body.error.code).toBe('account_temporarily_locked');
     expect(lockedLoginRes.body.error.retry_after_seconds).toBeGreaterThan(0);
+
+    // 2c. Login with valid credentials and recognized device (fp_old_device_100) while locked succeeds with 200
+    const recognizedLoginRes = await request(app)
+      .post('/api/v1/auth/login')
+      .set('x-device-fingerprint', 'fp_old_device_100')
+      .send({ email: user.email, password: plainPassword })
+      .expect(200);
+    expect(recognizedLoginRes.body.token).toBeDefined();
 
     // 3. Consistency across Redis restart/flush: delete the Redis account_lock key while MySQL locked_until is still in the future
     const client = redisStorage.getRedisClient();

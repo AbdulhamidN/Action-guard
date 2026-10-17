@@ -247,7 +247,7 @@ function enforce(actionType, options = {}) {
       }
 
       // 6. Determine enforcement outcome
-      if (enforcementMode === 'recommend_only') {
+      if (enforcementMode === 'recommend_only' && !isFailSafe) {
         if (recommendedDecision === 'allow') {
           effectiveDecision = 'allow';
         } else {
