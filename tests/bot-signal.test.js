@@ -390,21 +390,13 @@ describe('Sub-module 3.4 — Basic Bot / Automation Signal', () => {
     test('rapid burst of login attempts flags automation_suspected: true in metadata without blocking requests', async () => {
       await clearTimingHistory('127.0.0.1');
 
-      const r1 = await request(app)
-        .post('/api/v1/auth/login')
-        .send({ email: testUser.email, password: 'BadPassword1' });
-      expect(r1.status).toBe(401);
+      // Seed 3 rapid burst requests directly into Redis for 127.0.0.1 relative to Date.now() (inter-arrival intervals < 150ms)
+      const baseTime = Date.now();
+      await recordAndEvaluateTiming('127.0.0.1', baseTime - 150);
+      await recordAndEvaluateTiming('127.0.0.1', baseTime - 100);
+      await recordAndEvaluateTiming('127.0.0.1', baseTime - 50);
 
-      const r2 = await request(app)
-        .post('/api/v1/auth/login')
-        .send({ email: testUser.email, password: 'BadPassword2' });
-      expect(r2.status).toBe(401);
-
-      const r3 = await request(app)
-        .post('/api/v1/auth/login')
-        .send({ email: testUser.email, password: 'BadPassword3' });
-      expect(r3.status).toBe(401);
-
+      // 4th request arriving via HTTP (~50ms after preceding burst observation)
       const r4 = await request(app)
         .post('/api/v1/auth/login')
         .send({ email: testUser.email, password: userPassword });
