@@ -8,6 +8,7 @@ import { apiRequest } from '../services/apiClient.js';
 import { clearUserToken } from '../services/authStorage.js';
 import { clearAllCancellationTokens } from '../services/cancellationStorage.js';
 import { SessionsTab } from '../components/user/SessionsTab.jsx';
+import { DevicesTab } from '../components/user/DevicesTab.jsx';
 import { HistoryTab } from '../components/user/HistoryTab.jsx';
 import { CoolingOffTab } from '../components/user/CoolingOffTab.jsx';
 import { ActionTriggerPanel } from '../components/user/ActionTriggerPanel.jsx';
@@ -145,6 +146,19 @@ export function UserShell() {
 
             <button
               type="button"
+              onClick={() => setActiveTab('devices')}
+              className={`whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm focus:outline-none ${
+                activeTab === 'devices'
+                  ? 'border-indigo-600 text-indigo-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+              data-testid="tab-devices"
+            >
+              Trusted Devices
+            </button>
+
+            <button
+              type="button"
               onClick={() => setActiveTab('history')}
               className={`whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm focus:outline-none ${
                 activeTab === 'history'
@@ -188,6 +202,10 @@ export function UserShell() {
         <div className="pt-2">
           {activeTab === 'sessions' && (
             <SessionsTab currentSessionId={currentSessionId} onSessionTerminated={loadUserProfile} />
+          )}
+
+          {activeTab === 'devices' && (
+            <DevicesTab onDeviceChanged={loadUserProfile} />
           )}
 
           {activeTab === 'history' && <HistoryTab />}

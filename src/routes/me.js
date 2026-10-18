@@ -10,6 +10,13 @@ const {
   buildUserRiskHistoryItem,
   buildUserDecisionPayload
 } = require('../realtime/payloads');
+const { sendError } = require('../utils/errors');
+const {
+  listUserDevices,
+  enrollTrustedDevice,
+  revokeDeviceTrust,
+  validateDeviceLabel
+} = require('../services/deviceService');
 
 const router = express.Router();
 
@@ -326,6 +333,256 @@ router.get('/decisions', authenticateToken, async (req, res) => {
       error: 'internal_error',
       message: 'Failed to retrieve decisions'
     });
+  }
+});
+
+/**
+ * GET /api/v1/me/devices
+ * Returns all devices registered to the authenticated user with live trust status and current session indicator.
+ * Strictly redacts raw fingerprints.
+ */
+router.get('/devices', authenticateToken, async (req, res) => {
+  try {
+    const callerId = req.user.id || req.user.user_id;
+    const activeDeviceId = req.session?.device_id || null;
+
+    const devices = await listUserDevices(callerId);
+
+    const payloads = devices.map((d) => ({
+      id: d.id,
+      label: d.label || null,
+      is_trusted: Boolean(d.is_trusted),
+      is_trust_active: Boolean(d.is_trust_active),
+      trusted_at: d.trusted_at ? (d.trusted_at instanceof Date ? d.trusted_at.toISOString() : new Date(d.trusted_at).toISOString()) : null,
+      expires_at: d.expires_at ? (d.expires_at instanceof Date ? d.expires_at.toISOString() : new Date(d.expires_at).toISOString()) : null,
+      revoked_at: d.revoked_at ? (d.revoked_at instanceof Date ? d.revoked_at.toISOString() : new Date(d.revoked_at).toISOString()) : null,
+      first_seen_at: d.first_seen_at ? (d.first_seen_at instanceof Date ? d.first_seen_at.toISOString() : new Date(d.first_seen_at).toISOString()) : null,
+      last_used_at: d.last_used_at ? (d.last_used_at instanceof Date ? d.last_used_at.toISOString() : new Date(d.last_used_at).toISOString()) : null,
+      is_current_device: Boolean(activeDeviceId && d.id === activeDeviceId)
+    }));
+
+    return res.status(200).json(payloads);
+  } catch (err) {
+    return sendError(res, 500, 'internal_error', 'Failed to retrieve devices');
+  }
+});
+
+/**
+ * POST /api/v1/me/devices/enroll
+ * Enrolls the device associated with the active authenticated session as trusted.
+ * MANDATORY: Bound strictly to req.session.device_id. Rejects client-controlled overrides.
+ */
+router.post('/devices/enroll', authenticateToken, async (req, res) => {
+  try {
+    const callerId = req.user.id || req.user.user_id;
+    const activeDeviceId = req.session?.device_id;
+
+    if (!activeDeviceId || typeof activeDeviceId !== 'string' || activeDeviceId.trim().length === 0) {
+      return sendError(
+        res,
+        403,
+        'device_session_mismatch',
+        'No verified device identity is bound to the active session'
+      );
+    }
+
+    const { deviceId, label } = req.body || {};
+
+    // Prevent client-controlled deviceId from overriding session identity
+    if (deviceId !== undefined && deviceId !== null && deviceId !== activeDeviceId) {
+      return sendError(
+        res,
+        403,
+        'device_session_mismatch',
+        'Cannot enroll a device that does not match the active session device'
+      );
+    }
+
+    if (label !== undefined && label !== null && !validateDeviceLabel(label)) {
+      return sendError(
+        res,
+        400,
+        'invalid_request',
+        'Invalid device label: must be between 1 and 100 characters without control characters'
+      );
+    }
+
+    const result = await enrollTrustedDevice({
+      userId: callerId,
+      deviceId: activeDeviceId,
+      currentDeviceId: activeDeviceId,
+      label: label !== undefined ? label : null
+    });
+
+    return res.status(200).json({
+      message: 'Device trust enrolled successfully',
+      device: {
+        id: result.device.id,
+        label: result.device.label || null,
+        is_trusted: Boolean(result.device.is_trusted),
+        trusted_at: result.device.trusted_at ? new Date(result.device.trusted_at).toISOString() : null,
+        expires_at: result.device.expires_at ? new Date(result.device.expires_at).toISOString() : null,
+        revoked_at: result.device.revoked_at ? new Date(result.device.revoked_at).toISOString() : null,
+        first_seen_at: result.device.first_seen_at ? new Date(result.device.first_seen_at).toISOString() : null,
+        last_used_at: result.device.last_used_at ? new Date(result.device.last_used_at).toISOString() : null
+      },
+      is_trust_active: Boolean(result.is_trust_active)
+    });
+  } catch (err) {
+    if (err.status && err.status < 500) {
+      return sendError(res, err.status, err.code ? err.code.toLowerCase() : 'invalid_request', err.message);
+    }
+    return sendError(res, 500, 'internal_error', 'Failed to enroll trusted device');
+  }
+});
+
+/**
+ * POST /api/v1/me/devices/:id/trust
+ * Alternative REST endpoint to enroll a specific device by ID.
+ * Strictly enforces that :id matches the authenticated session's device.
+ */
+router.post('/devices/:id/trust', authenticateToken, async (req, res) => {
+  try {
+    const callerId = req.user.id || req.user.user_id;
+    const targetDeviceId = req.params.id;
+    const activeDeviceId = req.session?.device_id;
+
+    if (!activeDeviceId || typeof activeDeviceId !== 'string' || activeDeviceId.trim().length === 0) {
+      return sendError(
+        res,
+        403,
+        'device_session_mismatch',
+        'No verified device identity is bound to the active session'
+      );
+    }
+
+    if (!targetDeviceId || targetDeviceId !== activeDeviceId) {
+      return sendError(
+        res,
+        403,
+        'device_session_mismatch',
+        'Cannot enroll a device that does not match the active session device'
+      );
+    }
+
+    const { label } = req.body || {};
+    if (label !== undefined && label !== null && !validateDeviceLabel(label)) {
+      return sendError(
+        res,
+        400,
+        'invalid_request',
+        'Invalid device label: must be between 1 and 100 characters without control characters'
+      );
+    }
+
+    const result = await enrollTrustedDevice({
+      userId: callerId,
+      deviceId: targetDeviceId,
+      currentDeviceId: activeDeviceId,
+      label: label !== undefined ? label : null
+    });
+
+    return res.status(200).json({
+      message: 'Device trust enrolled successfully',
+      device: {
+        id: result.device.id,
+        label: result.device.label || null,
+        is_trusted: Boolean(result.device.is_trusted),
+        trusted_at: result.device.trusted_at ? new Date(result.device.trusted_at).toISOString() : null,
+        expires_at: result.device.expires_at ? new Date(result.device.expires_at).toISOString() : null,
+        revoked_at: result.device.revoked_at ? new Date(result.device.revoked_at).toISOString() : null,
+        first_seen_at: result.device.first_seen_at ? new Date(result.device.first_seen_at).toISOString() : null,
+        last_used_at: result.device.last_used_at ? new Date(result.device.last_used_at).toISOString() : null
+      },
+      is_trust_active: Boolean(result.is_trust_active)
+    });
+  } catch (err) {
+    if (err.status && err.status < 500) {
+      return sendError(res, err.status, err.code ? err.code.toLowerCase() : 'invalid_request', err.message);
+    }
+    return sendError(res, 500, 'internal_error', 'Failed to enroll trusted device');
+  }
+});
+
+/**
+ * DELETE /api/v1/me/devices/:id
+ * Revokes trust for a device owned by the authenticated user. Idempotent.
+ */
+router.delete('/devices/:id', authenticateToken, async (req, res) => {
+  try {
+    const callerId = req.user.id || req.user.user_id;
+    const targetDeviceId = req.params.id;
+
+    if (!targetDeviceId || typeof targetDeviceId !== 'string' || targetDeviceId.trim().length === 0) {
+      return sendError(res, 400, 'invalid_request', 'deviceId parameter is required');
+    }
+
+    const result = await revokeDeviceTrust({
+      userId: callerId,
+      deviceId: targetDeviceId.trim()
+    });
+
+    return res.status(200).json({
+      message: 'Device trust revoked successfully',
+      device: {
+        id: result.device.id,
+        label: result.device.label || null,
+        is_trusted: Boolean(result.device.is_trusted),
+        trusted_at: result.device.trusted_at ? new Date(result.device.trusted_at).toISOString() : null,
+        expires_at: result.device.expires_at ? new Date(result.device.expires_at).toISOString() : null,
+        revoked_at: result.device.revoked_at ? new Date(result.device.revoked_at).toISOString() : null,
+        first_seen_at: result.device.first_seen_at ? new Date(result.device.first_seen_at).toISOString() : null,
+        last_used_at: result.device.last_used_at ? new Date(result.device.last_used_at).toISOString() : null
+      },
+      alreadyRevoked: Boolean(result.alreadyRevoked),
+      is_trust_active: Boolean(result.is_trust_active)
+    });
+  } catch (err) {
+    if (err.status && err.status < 500) {
+      return sendError(res, err.status, err.code ? err.code.toLowerCase() : 'invalid_request', err.message);
+    }
+    return sendError(res, 500, 'internal_error', 'Failed to revoke device trust');
+  }
+});
+
+/**
+ * POST /api/v1/me/devices/:id/revoke
+ * Alternative REST endpoint to revoke device trust. Idempotent.
+ */
+router.post('/devices/:id/revoke', authenticateToken, async (req, res) => {
+  try {
+    const callerId = req.user.id || req.user.user_id;
+    const targetDeviceId = req.params.id;
+
+    if (!targetDeviceId || typeof targetDeviceId !== 'string' || targetDeviceId.trim().length === 0) {
+      return sendError(res, 400, 'invalid_request', 'deviceId parameter is required');
+    }
+
+    const result = await revokeDeviceTrust({
+      userId: callerId,
+      deviceId: targetDeviceId.trim()
+    });
+
+    return res.status(200).json({
+      message: 'Device trust revoked successfully',
+      device: {
+        id: result.device.id,
+        label: result.device.label || null,
+        is_trusted: Boolean(result.device.is_trusted),
+        trusted_at: result.device.trusted_at ? new Date(result.device.trusted_at).toISOString() : null,
+        expires_at: result.device.expires_at ? new Date(result.device.expires_at).toISOString() : null,
+        revoked_at: result.device.revoked_at ? new Date(result.device.revoked_at).toISOString() : null,
+        first_seen_at: result.device.first_seen_at ? new Date(result.device.first_seen_at).toISOString() : null,
+        last_used_at: result.device.last_used_at ? new Date(result.device.last_used_at).toISOString() : null
+      },
+      alreadyRevoked: Boolean(result.alreadyRevoked),
+      is_trust_active: Boolean(result.is_trust_active)
+    });
+  } catch (err) {
+    if (err.status && err.status < 500) {
+      return sendError(res, err.status, err.code ? err.code.toLowerCase() : 'invalid_request', err.message);
+    }
+    return sendError(res, 500, 'internal_error', 'Failed to revoke device trust');
   }
 });
 
