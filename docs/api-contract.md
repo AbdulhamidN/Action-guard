@@ -1057,10 +1057,12 @@ Broadcast to `admin:stream`:
 
 Protected endpoints allowing authenticated users (`authenticateToken`) to inspect their own security history, active sessions, and policy decisions. All payloads reuse the pure sanitization builders from `src/realtime/payloads.js` and enforce the tier-only contract.
 
-* `GET /api/v1/me/sessions`: Returns array of user-facing session objects (`buildUserSessionPayload`) containing `session_id`, `created_at`, `expires_at`, `is_active`, `is_current`, and latest evaluated `risk_tier` (omits score and technical signals).
+* `GET /api/v1/me/sessions`: Returns array of user-facing session objects (`buildUserSessionPayload`) containing `session_id`, `created_at`, `expires_at`, `is_active`, `is_current`, `coarse_location: { country, region }`, and latest evaluated `risk_tier` (omits score and technical signals).
+* `DELETE /api/v1/me/sessions/:id`: Terminates another active session owned by the authenticated caller (`Module 12c-2`). Rejects terminating the caller's active/current session with `400 invalid_request` ("Cannot terminate current active session via this endpoint; use POST /api/v1/auth/logout"). Returns `404 not_found` if the session does not exist or belongs to another user. Invalidates the session in MySQL and Redis, and records a `session_terminated` audit event with `terminated_by: 'user'`.
 * `GET /api/v1/me/events?limit&before`: Returns array of security events owned by the authenticated caller (`buildEventRecordedPayload` without `user_id`). Validates pagination (`limit` default 50, max 200; `before` ISO 8601).
 * `GET /api/v1/me/risk-history?session_id&limit&before`: Returns array of risk evaluations for the caller (`buildUserRiskHistoryItem` with `event_id`, `session_id`, `risk_tier`, `evaluated_at`). If `session_id` is passed, strictly enforces session ownership (`404 not_found` if not owned).
 * `GET /api/v1/me/decisions?limit&before`: Returns array of policy decisions applied to the caller (`buildUserDecisionPayload` with `decision_id`, `event_id`, `session_id`, `action_type`, `decision`, `enforcement_outcome`, `risk_tier`, `decided_at`, `explanation.user_facing`).
+* `GET /api/v1/sessions/:id/step-up/demo-code?challenge_id=...`: Development and automated testing endpoint (`Module 12c-2`). Strictly returns `404 not_found` in production (`NODE_ENV === 'production'`) or when `ACTIONGUARD_DEMO_MODE !== 'true'`. Returns `{ challenge_id, scope, demo_code, expires_at }` to facilitate test automation and live demo walkthroughs without external email delivery dependencies.
 
 ## 13. Admin Dashboard & Management API (`/api/v1/admin/*` — Module 12a)
 

@@ -406,4 +406,51 @@ router.get(
   }
 });
 
+/**
+ * GET /api/v1/sessions/:id/step-up/demo-code?challenge_id=...
+ * Development and demo only endpoint returning latest demo OTP code for a challenge.
+ * Returns 404 in production or when ACTIONGUARD_DEMO_MODE is not true.
+ */
+router.get(
+  '/:id/step-up/demo-code',
+  apiRateLimiter,
+  validateIdParam('id'),
+  authenticateToken,
+  async (req, res) => {
+    try {
+      if (process.env.NODE_ENV === 'production' || process.env.ACTIONGUARD_DEMO_MODE !== 'true') {
+        return sendError(res, 404, 'not_found', 'Demo code endpoint is not available');
+      }
+
+      const requestedSessionId = req.params.id;
+      const activeSessionId = req.session?.session_id || req.user?.session_id;
+
+      if (requestedSessionId !== activeSessionId) {
+        return sendError(res, 403, 'forbidden', 'Cannot retrieve demo code for another session');
+      }
+
+      const challengeId = req.query.challenge_id;
+      if (!challengeId || typeof challengeId !== 'string') {
+        return sendError(res, 400, 'invalid_request', 'challenge_id query parameter is required');
+      }
+
+      const { getDemoChallengeRecord } = require('../services/stepUpService');
+      const challenge = getDemoChallengeRecord(challengeId);
+      if (!challenge || challenge.sessionId !== activeSessionId) {
+        return sendError(res, 404, 'not_found', 'Demo challenge not found or expired');
+      }
+
+      return res.status(200).json({
+        challenge_id: challengeId,
+        scope: challenge.scope,
+        demo_code: challenge.otp,
+        expires_at: challenge.expiresAt
+      });
+    } catch (error) {
+      console.error('[Sessions API] Error retrieving demo code:', error);
+      return sendError(res, 500, 'internal_error', 'An unexpected error occurred while retrieving demo code');
+    }
+  }
+);
+
 module.exports = router;

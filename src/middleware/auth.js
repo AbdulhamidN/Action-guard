@@ -34,6 +34,9 @@ function getJwtSecret() {
  * @param {object} [env=process.env]
  */
 function assertRequiredSecrets(env = process.env) {
+  if (env.ACTIONGUARD_DEMO_MODE === 'true' && env.NODE_ENV === 'production') {
+    throw new Error('ACTIONGUARD_DEMO_MODE must not be enabled in production environments.');
+  }
   if (env.NODE_ENV === 'test') {
     return;
   }

@@ -379,15 +379,17 @@ function buildAdminDecisionPayload(decisionRecord) {
  *   expires_at: string,
  *   is_active: boolean,
  *   is_current: boolean,
- *   risk_tier: string|null
+ *   risk_tier: string|null,
+ *   coarse_location: { country: string|null, region: string|null }|null
  * }}
  */
-function buildUserSessionPayload(session, isCurrent = false, latestAssessment = null) {
+function buildUserSessionPayload(session, isCurrent = false, latestAssessment = null, eventOrMeta = null) {
   if (!session || typeof session !== 'object') {
     throw new TypeError('session is required to build user session payload');
   }
 
   if (typeof isCurrent === 'object' && isCurrent !== null) {
+    eventOrMeta = latestAssessment;
     latestAssessment = isCurrent;
     isCurrent = false;
   }
@@ -408,13 +410,29 @@ function buildUserSessionPayload(session, isCurrent = false, latestAssessment = 
 
   const riskTier = latestAssessment && latestAssessment.risk_tier ? latestAssessment.risk_tier : null;
 
+  let coarseLocation = null;
+  if (eventOrMeta) {
+    if (eventOrMeta.coarse_location) {
+      coarseLocation = eventOrMeta.coarse_location;
+    } else if (eventOrMeta.context) {
+      const c = eventOrMeta.context;
+      if (c.geo_country || c.geo_region) {
+        coarseLocation = {
+          country: c.geo_country || null,
+          region: c.geo_region || null
+        };
+      }
+    }
+  }
+
   return {
     session_id: session.id || session.session_id || null,
     created_at: createdAt,
     expires_at: expiresAt,
     is_active: Boolean(session.is_active),
     is_current: Boolean(isCurrent),
-    risk_tier: riskTier
+    risk_tier: riskTier,
+    coarse_location: coarseLocation
   };
 }
 

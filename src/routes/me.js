@@ -2,6 +2,8 @@ const express = require('express');
 const { Op } = require('sequelize');
 const { authenticateToken } = require('../middleware/auth');
 const { Session, SecurityEvent, RiskAssessment, PolicyDecision } = require('../database/models');
+const { invalidateSession } = require('../services/sessionService');
+const { recordSecurityEvent } = require('../services/eventService');
 const {
   buildUserSessionPayload,
   buildEventRecordedPayload,
@@ -65,7 +67,7 @@ router.get('/', authenticateToken, (req, res) => {
 
 /**
  * GET /api/v1/me/sessions
- * Returns user sessions with latest risk tier.
+ * Returns user sessions with latest risk tier and coarse location.
  */
 router.get('/sessions', authenticateToken, async (req, res) => {
   try {
@@ -82,15 +84,26 @@ router.get('/sessions', authenticateToken, async (req, res) => {
     }
 
     const sessionIds = sessions.map((s) => s.id);
-    const assessments = await RiskAssessment.findAll({
-      where: {
-        session_id: { [Op.in]: sessionIds }
-      },
-      order: [
-        ['evaluated_at', 'DESC'],
-        ['id', 'DESC']
-      ]
-    });
+    const [assessments, events] = await Promise.all([
+      RiskAssessment.findAll({
+        where: {
+          session_id: { [Op.in]: sessionIds }
+        },
+        order: [
+          ['evaluated_at', 'DESC'],
+          ['id', 'DESC']
+        ]
+      }),
+      SecurityEvent.findAll({
+        where: {
+          session_id: { [Op.in]: sessionIds }
+        },
+        order: [
+          ['timestamp', 'DESC'],
+          ['event_id', 'DESC']
+        ]
+      })
+    ]);
 
     const latestBySession = new Map();
     for (const a of assessments) {
@@ -99,10 +112,18 @@ router.get('/sessions', authenticateToken, async (req, res) => {
       }
     }
 
+    const latestEventBySession = new Map();
+    for (const e of events) {
+      if (!latestEventBySession.has(e.session_id)) {
+        latestEventBySession.set(e.session_id, e);
+      }
+    }
+
     const payloads = sessions.map((s) => {
       const isCurrent = Boolean(req.user.session_id && s.id === req.user.session_id);
       const latest = latestBySession.get(s.id) || null;
-      return buildUserSessionPayload(s, isCurrent, latest);
+      const latestEv = latestEventBySession.get(s.id) || null;
+      return buildUserSessionPayload(s, isCurrent, latest, latestEv);
     });
 
     return res.status(200).json(payloads);
@@ -110,6 +131,75 @@ router.get('/sessions', authenticateToken, async (req, res) => {
     return res.status(500).json({
       error: 'internal_error',
       message: 'Failed to retrieve sessions'
+    });
+  }
+});
+
+/**
+ * DELETE /api/v1/me/sessions/:id
+ * Terminates another active session owned by the authenticated caller.
+ */
+router.delete('/sessions/:id', authenticateToken, async (req, res) => {
+  try {
+    const targetSessionId = req.params.id;
+    if (!targetSessionId || typeof targetSessionId !== 'string') {
+      return res.status(404).json({
+        error: {
+          code: 'not_found',
+          message: 'Session not found'
+        }
+      });
+    }
+
+    // Disallow terminating current active session via generic other-session endpoint
+    if (req.user.session_id && targetSessionId === req.user.session_id) {
+      return res.status(400).json({
+        error: {
+          code: 'invalid_request',
+          message: 'Cannot terminate the active session via this endpoint; use POST /api/v1/auth/logout'
+        }
+      });
+    }
+
+    const session = await Session.findOne({
+      where: {
+        id: targetSessionId,
+        user_id: req.user.id
+      }
+    });
+
+    if (!session) {
+      return res.status(404).json({
+        error: {
+          code: 'not_found',
+          message: 'Session not found'
+        }
+      });
+    }
+
+    await invalidateSession(session.id);
+
+    await recordSecurityEvent({
+      userId: req.user.id,
+      sessionId: session.id,
+      eventType: 'session_terminated',
+      metadata: {
+        terminated_by: 'user',
+        reason: 'user_terminated_other_session',
+        caller_session_id: req.user.session_id || null
+      }
+    });
+
+    return res.status(200).json({
+      message: 'Session successfully terminated',
+      session_id: session.id
+    });
+  } catch (err) {
+    return res.status(500).json({
+      error: {
+        code: 'internal_error',
+        message: 'Failed to terminate session'
+      }
     });
   }
 });

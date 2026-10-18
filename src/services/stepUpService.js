@@ -119,7 +119,7 @@ function deriveChallengeSalt(challengeId, userId, sessionId) {
  * Prunes expired entries from the test-only challenge outbox.
  */
 function pruneTestChallengeOutbox(nowMs = Date.now()) {
-  if (process.env.NODE_ENV !== 'test') {
+  if (process.env.NODE_ENV !== 'test' && process.env.ACTIONGUARD_DEMO_MODE !== 'true') {
     return;
   }
   for (const [id, entry] of testChallengeOutbox.entries()) {
@@ -336,6 +336,10 @@ async function checkStepUpLimits({ userId, sessionId, scope }) {
  * @returns {Promise<{ challenge_id: string, scope: string, delivery_channel: string, masked_destination: string, expires_at: string, ttl_seconds: number }>}
  */
 async function issueStepUpChallenge({ userId, sessionId, scope, now = new Date() }) {
+  if (process.env.ACTIONGUARD_DEMO_MODE === 'true' && process.env.NODE_ENV === 'production') {
+    throw new Error('ACTIONGUARD_DEMO_MODE cannot be enabled in production environments');
+  }
+
   if (!userId || !sessionId || !scope) {
     const err = new Error('userId, sessionId, and scope are required');
     err.code = 'INVALID_REQUEST';
@@ -413,7 +417,14 @@ async function issueStepUpChallenge({ userId, sessionId, scope, now = new Date()
   const challengeKey = `${REDIS_PREFIXES.STEP_UP_CHALLENGE}${challengeId}`;
   await client.set(challengeKey, JSON.stringify(challengeRecord), 'EX', STEP_UP_CHALLENGE_TTL_SECONDS);
 
-  if (process.env.NODE_ENV === 'test') {
+  const isTest = process.env.NODE_ENV === 'test';
+  const isDemoMode = process.env.ACTIONGUARD_DEMO_MODE === 'true';
+
+  if (isDemoMode && process.env.NODE_ENV === 'production') {
+    throw new Error('ACTIONGUARD_DEMO_MODE cannot be enabled in production environments');
+  }
+
+  if (isTest || isDemoMode) {
     pruneTestChallengeOutbox(nowMs);
     testChallengeOutbox.set(challengeId, {
       otp,
@@ -423,6 +434,21 @@ async function issueStepUpChallenge({ userId, sessionId, scope, now = new Date()
       destination: user.email,
       expiresAt: expiresAtIso
     });
+
+    if (isDemoMode) {
+      console.log(`[DEMO OTP] Scope: ${normalizedScope} | Code: ${otp} | Expires: ${expiresAtIso}`);
+      if (process.env.ACTIONGUARD_DEMO_OTP_FILE) {
+        try {
+          const fs = require('fs');
+          fs.appendFileSync(
+            process.env.ACTIONGUARD_DEMO_OTP_FILE,
+            JSON.stringify({ challengeId, scope: normalizedScope, otp, expiresAt: expiresAtIso }) + '\n'
+          );
+        } catch (fileErr) {
+          console.warn('[DEMO OTP] Failed to write demo OTP to file:', fileErr.message);
+        }
+      }
+    }
   }
 
   return {
@@ -715,6 +741,23 @@ function getTestChallengeRecord(challengeId) {
   return testChallengeOutbox.get(challengeId) || null;
 }
 
+/**
+ * Demo and development helper to retrieve a challenge record when ACTIONGUARD_DEMO_MODE is true.
+ * Strictly forbidden in production environments.
+ *
+ * @param {string} challengeId
+ * @returns {object|null}
+ */
+function getDemoChallengeRecord(challengeId) {
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('getDemoChallengeRecord cannot be called in production environments');
+  }
+  if (process.env.NODE_ENV !== 'test' && process.env.ACTIONGUARD_DEMO_MODE !== 'true') {
+    return null;
+  }
+  return testChallengeOutbox.get(challengeId) || null;
+}
+
 module.exports = {
   issueStepUpChallenge,
   verifyStepUpChallenge,
@@ -722,6 +765,7 @@ module.exports = {
   resolveLocalStepUpKeys,
   getTestChallengeOtp,
   getTestChallengeRecord,
+  getDemoChallengeRecord,
   testChallengeOutbox,
   maskEmail
 };
