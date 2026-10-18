@@ -1,0 +1,59 @@
+[
+  {
+    "event_id": "evt_fixture_05_containment",
+    "user_id": "usr_fixture_admin_demo_01",
+    "session_id": "sess_fixture_contained_02",
+    "event_type": "session_terminated",
+    "timestamp": "2026-10-18T06:32:29.773Z",
+    "coarse_location": null,
+    "device_ref": null
+  },
+  {
+    "event_id": "evt_fixture_04_pwd_change",
+    "user_id": "usr_fixture_admin_demo_01",
+    "session_id": "sess_fixture_contained_02",
+    "event_type": "password_change",
+    "timestamp": "2026-10-18T06:32:29.773Z",
+    "coarse_location": {
+      "country": "RU",
+      "region": "MOW"
+    },
+    "device_ref": "029658de54e9"
+  },
+  {
+    "event_id": "evt_fixture_03_recovery",
+    "user_id": "usr_fixture_admin_demo_01",
+    "session_id": "sess_fixture_contained_02",
+    "event_type": "recovery_email_change",
+    "timestamp": "2026-10-18T06:27:29.773Z",
+    "coarse_location": {
+      "country": "RU",
+      "region": "MOW"
+    },
+    "device_ref": "029658de54e9"
+  },
+  {
+    "event_id": "evt_fixture_02_new_dev",
+    "user_id": "usr_fixture_admin_demo_01",
+    "session_id": "sess_fixture_active_01",
+    "event_type": "new_device",
+    "timestamp": "2026-10-18T06:17:29.773Z",
+    "coarse_location": {
+      "country": "US",
+      "region": "CA"
+    },
+    "device_ref": "8f2e30f11757"
+  },
+  {
+    "event_id": "evt_fixture_01_login",
+    "user_id": "usr_fixture_admin_demo_01",
+    "session_id": "sess_fixture_active_01",
+    "event_type": "login_success",
+    "timestamp": "2026-10-18T06:07:29.773Z",
+    "coarse_location": {
+      "country": "US",
+      "region": "CA"
+    },
+    "device_ref": "8f2e30f11757"
+  }
+]

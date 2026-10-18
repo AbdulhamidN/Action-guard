@@ -363,3 +363,28 @@ Module 12b implements the app shell foundation, establishing a strict separation
 * **DEV-Only Fingerprint Override Tree-Shaking**:
   * To support multi-device security simulation across different browser profiles, development builds allow an explicit `localStorage` override key (`ag_fp_override`).
   * In production builds, this override branch is eliminated at compile time via dead code elimination, ensuring that production clients strictly derive hardware visitor IDs.
+
+## 14. Admin Console & Interactive Explanation Graph (Module 12c-1)
+
+Module 12c-1 completes the administrative user interface and causal explainability layer:
+
+* **Operator Navigation & Sub-Routing**:
+  * Sub-routing is mounted under `/admin/*` within the `AdminShell` layout:
+    * `/admin` / `/admin/overview`: Security telemetry overview with 24h/7d window toggling, Recharts KPI distributions (risk tiers and decisions by outcome), and an interactive live console feed. The feed maintains a bounded ring buffer of 200 items (newest-first), provides a pause/resume stream toggle that freezes the display, and offers real-time filtering by risk tier, decision, and user ID substring.
+    * `/admin/users`: User directory featuring 300ms debounced prefix search, offset/limit pagination, active session counts, risk tier badges, and account containment lock flags (`locked_until`).
+    * `/admin/users/:id`: Comprehensive user investigation view with 4 distinct tabs: a unified chronologically sorted Timeline (merging security events, risk evaluations, decisions, and active sequence steps), Risk score time series with tier reference threshold bands (Low: 0-29, Medium: 30-59, High: 60-79, Critical: 80-100), Decisions list with rule evaluations and graph links, and Sessions state inspection.
+    * `/admin/users/:userId/decisions/:decisionId`: Interactive Decision Explanation Graph fulfilling FR-35.
+    * `/admin/policy`: Read-only inspection of the active 4x4 baseline decision matrix, escalation override rules, fail-safe fallback boundaries, and action sensitivity catalog.
+* **Deterministic 5-Column Explanation Graph (`@xyflow/react`)**:
+  * Employs deterministic positioning along 5 functional columns (Signals $\to$ Risk Assessment $\to$ Policy Reasons $\to$ Effective Decision $\to$ Enforcement Outcome) with fixed X coordinates.
+  * Evaluates signal weights and assigns distinct text labels (`Mitigating signal` vs `Aggravating signal`) alongside border styling, ensuring full accessibility without relying on color alone.
+  * Conducts mathematical weight-to-score reconciliation: if $\sum \text{signal.weight} \neq \text{risk\_score}$, a prominent warning banner is rendered explaining that baseline floor/ceiling thresholds or policy normalizations account for the divergence.
+  * Provides an accessible "Why this decision?" WCAG summary table for screen readers and keyboard navigation, breaking down each signal, its category, weight, and influence on the decision.
+  * Renders dual user-facing and administrator audit explanation panels.
+* **Accessible Slide-Over Detail Drawer**:
+  * Selecting any event from the live console or user timeline opens the `EventDetailDrawer`, declaring `role="dialog"`, `aria-modal="true"`, and `aria-labelledby="drawer-title"`.
+  * Traps focus on open, listens for `Escape` to close, and restores focus back to the triggering element upon closure.
+* **Code Splitting & Performance Hygiene**:
+  * Heavy chart and graph libraries (`recharts`, `@xyflow/react`) are imported only within their respective sub-page modules.
+  * All five sub-pages are lazy-loaded via `React.lazy` and `Suspense`, ensuring the core frontend bundle remains light (~317 kB) and unaffected by administrative visualization dependencies.
+  * All external strings are rendered strictly as plain text; `dangerouslySetInnerHTML` is prohibited across all frontend source files.

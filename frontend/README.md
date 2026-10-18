@@ -91,6 +91,14 @@ The frontend separates user and admin operations into distinct isolated shells:
    - The issued operator token (`agadm_...`) is held strictly in JavaScript memory (`authStorage.js`). A page refresh automatically resets memory and returns to the admin login.
    - Sockets connect with `auth: { adminToken }` and receive global platform telemetry.
    - Guarded by `AdminGuard`; redirects to `/admin/login` if unauthenticated.
+   - Provides sub-routing across 5 operator views:
+     - `/admin` or `/admin/overview`: System overview KPIs (24h/7d toggle), Recharts visualizations for risk assessments and decision outcomes, and a live console feed with a bounded 200-event buffer, pause/resume, and multi-field filtering.
+     - `/admin/users`: User directory with 300ms debounced prefix/email search, offset/limit pagination, and account containment lock flags.
+     - `/admin/users/:id`: User investigation page with 4 tabs: unified chronological Timeline (events + risk + decisions + sequence steps), Risk score time series with threshold reference bands, Decisions records with links to graph, and active/contained Sessions.
+     - `/admin/users/:userId/decisions/:decisionId`: Deterministic 5-column causal explanation graph (`@xyflow/react`) mapping signal inputs through risk assessment and policy rules to effective decisions and enforcement outcomes. Includes text labels and styling for mitigating (negative) weights, a mathematical weight-to-score reconciliation warning on baseline divergence, an accessible WCAG "Why this decision?" summary table, and dual user/admin explanations.
+     - `/admin/policy`: Read-only inspection of the authoritative 4x4 decision matrix, escalation override rules, fail-safe boundaries, and action sensitivity catalog.
+   - All 5 admin sub-pages are code-split and lazy-loaded via `React.lazy` and `Suspense`, ensuring the core entry bundle remains compact.
+   - Accessible slide-over detail drawer (`EventDetailDrawer.jsx`) traps focus, closes on `Escape`, and restores focus to triggering elements.
 
 3. **Zero Trust Hygiene**:
    - No tokens are stored in `localStorage`.
@@ -99,9 +107,26 @@ The frontend separates user and admin operations into distinct isolated shells:
 
 ## Testing
 
-Run unit and integration tests using Vitest:
+### Unit & Integration Tests (Vitest)
+
+Run all unit and component integration tests using Vitest (includes authentic fixture-driven tests from `docs/api-examples/`):
 
 ```bash
 cd frontend
 npm test
 ```
+
+### End-to-End Tests (Playwright)
+
+Run the Playwright Chromium E2E test verifying real-time WebSocket live updates without page reload directly from the repository root:
+
+```bash
+npm run test:e2e
+```
+
+#### Clean Checkout Setup Sequence
+1. Install root backend dependencies: `npm install`
+2. Install frontend dependencies: `npm --prefix frontend install`
+3. Download the Playwright Chromium browser binary: `npx --prefix frontend playwright install chromium`
+4. Ensure test database (port 3307 or `DB_PORT`) and Redis are accessible
+5. Run the E2E test suite: `npm run test:e2e`

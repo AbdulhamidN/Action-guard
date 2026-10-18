@@ -1,0 +1,88 @@
+[
+  {
+    "decision_id": "dec_fixture_02_contained",
+    "event_id": "evt_fixture_04_pwd_change",
+    "risk_assessment_id": "ra_fixture_02_critical",
+    "user_id": "usr_fixture_admin_demo_01",
+    "session_id": "sess_fixture_contained_02",
+    "action_type": "password_change",
+    "action_sensitivity": "critical",
+    "risk_score": 88,
+    "risk_tier": "critical",
+    "recommended_decision": "block",
+    "effective_decision": "block",
+    "enforcement_outcome": "contained_and_blocked",
+    "enforcement_mode": "automatic",
+    "policy_version": "default-v1@1.0.0",
+    "reasons": [
+      {
+        "reason": "Rapid credential cascade and impossible travel on critical sensitive action",
+        "source": "escalation_rules",
+        "rule_id": "critical_takeover_containment",
+        "decision": "block"
+      },
+      {
+        "source": "base_matrix",
+        "rule_id": "base_matrix.critical.critical",
+        "decision": "block"
+      }
+    ],
+    "contributing_signals": [
+      {
+        "signal": "seq_rapid_credential_cascade",
+        "category": "sequence",
+        "weight": 35
+      },
+      {
+        "signal": "unrecognized_device",
+        "category": "device",
+        "weight": 25
+      },
+      {
+        "signal": "impossible_travel",
+        "category": "location",
+        "weight": 28
+      }
+    ],
+    "decided_at": "2026-10-18T06:32:29.773Z",
+    "explanation": {
+      "user_facing": "Password modification halted. Session terminated due to critical risk escalation.",
+      "admin_facing": "Escalation rule critical_takeover_containment triggered: contained_and_blocked outcome applied."
+    }
+  },
+  {
+    "decision_id": "dec_fixture_01_allowed",
+    "event_id": "evt_fixture_01_login",
+    "risk_assessment_id": "ra_fixture_01_low",
+    "user_id": "usr_fixture_admin_demo_01",
+    "session_id": "sess_fixture_active_01",
+    "action_type": "login",
+    "action_sensitivity": "low",
+    "risk_score": 15,
+    "risk_tier": "low",
+    "recommended_decision": "allow",
+    "effective_decision": "allow",
+    "enforcement_outcome": "allowed",
+    "enforcement_mode": "automatic",
+    "policy_version": "default-v1@1.0.0",
+    "reasons": [
+      {
+        "source": "base_matrix",
+        "rule_id": "base_matrix.low.low",
+        "decision": "allow"
+      }
+    ],
+    "contributing_signals": [
+      {
+        "signal": "known_device",
+        "category": "device",
+        "weight": -10
+      }
+    ],
+    "decided_at": "2026-10-18T06:07:29.773Z",
+    "explanation": {
+      "user_facing": "Sign-in permitted.",
+      "admin_facing": "Low risk action evaluated against base matrix: allowed."
+    }
+  }
+]

@@ -6,3 +6,11 @@ coverage/
 *.log
 *.mmdb
 data/*.mmdb
+
+# Build artifacts
+dist/
+frontend/dist/
+
+# Playwright artifacts
+test-results/
+playwright-report/

@@ -1,0 +1,21 @@
+{
+  "window": "7d",
+  "window_start": "2026-10-11T06:37:30.590Z",
+  "window_end": "2026-10-18T06:37:30.590Z",
+  "decisions_by_outcome": {
+    "allow": 1,
+    "monitor": 1,
+    "reverify": 1,
+    "delay": 1,
+    "block": 1,
+    "contained_and_blocked": 1
+  },
+  "assessments_by_tier": {
+    "low": 1,
+    "medium": 1,
+    "high": 1,
+    "critical": 1
+  },
+  "active_sessions": 2,
+  "contained_sessions": 1
+}

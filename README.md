@@ -34,6 +34,41 @@ npm run build:frontend
 SERVE_FRONTEND=true npm start
 ```
 
+### 3. Testing & Verification
+
+**Backend Unit & Integration Tests:**
+```bash
+npm test
+```
+
+**Frontend Unit & Integration Tests (Vitest):**
+```bash
+cd frontend && npm test
+```
+
+**End-to-End Browser Tests (Playwright):**
+```bash
+# Setup from a clean checkout:
+npm --prefix frontend install
+npx --prefix frontend playwright install chromium
+
+# Run E2E test suite:
+npm run test:e2e
+```
+
+**API Fixture Drift Protection & Regeneration:**
+- In-memory verification (default, does not modify files on disk):
+  ```bash
+  npm test -- tests/api-fixtures-capture.test.js
+  ```
+- Intentional regeneration (requires explicit opt-in):
+  ```bash
+  REGENERATE_FIXTURES=true npm test -- tests/api-fixtures-capture.test.js
+  # or directly:
+  node scripts/generate-api-examples.js
+  ```
+
+
 
 Instead of trusting a user or session after authentication, ActionGuard continuously evaluates the security context of sessions and sensitive actions using signals such as device, location, behavior, timing, and recent activity.
 
