@@ -13,11 +13,13 @@ const UserListPage = React.lazy(() => import('./admin/UserListPage.jsx'));
 const UserDetailPage = React.lazy(() => import('./admin/UserDetailPage.jsx'));
 const DecisionGraphPage = React.lazy(() => import('./admin/DecisionGraphPage.jsx'));
 const PolicyPage = React.lazy(() => import('./admin/PolicyPage.jsx'));
+const LiveDemoPage = React.lazy(() => import('./admin/LiveDemoPage.jsx'));
 
 const ADMIN_NAV_LINKS = [
   { label: 'Overview', to: '/admin/overview', testId: 'admin-nav-overview' },
   { label: 'Users', to: '/admin/users', testId: 'admin-nav-users' },
-  { label: 'Policy', to: '/admin/policy', testId: 'admin-nav-policy' }
+  { label: 'Policy', to: '/admin/policy', testId: 'admin-nav-policy' },
+  { label: 'Live Demo', to: '/admin/demo', testId: 'admin-nav-demo' }
 ];
 
 /**
@@ -71,6 +73,7 @@ export function AdminShell() {
             <Route path="users/:id" element={<UserDetailPage />} />
             <Route path="users/:userId/decisions/:decisionId" element={<DecisionGraphPage />} />
             <Route path="policy" element={<PolicyPage />} />
+            <Route path="demo" element={<LiveDemoPage />} />
             <Route path="*" element={<Navigate to="overview" replace />} />
           </Routes>
         </Suspense>

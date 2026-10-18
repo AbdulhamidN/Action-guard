@@ -9,6 +9,10 @@
     "test": "jest --runInBand --forceExit",
     "migrate": "node src/database/migrate.js",
     "seed": "node src/database/seed.js",
+    "demo": "node src/scenarios/cli.js",
+    "demo:scenario-a": "node src/scenarios/cli.js --scenario=scenario_a",
+    "demo:scenario-b": "node src/scenarios/cli.js --scenario=scenario_b",
+    "demo:fp": "node src/scenarios/cli.js --scenario=fp_benign_new_device",
     "dev:frontend": "npm --prefix frontend run dev",
     "build:frontend": "npm --prefix frontend run build",
     "test:e2e": "node frontend/node_modules/@playwright/test/cli.js test --config=playwright.config.js"

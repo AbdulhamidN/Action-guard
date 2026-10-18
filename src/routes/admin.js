@@ -24,6 +24,13 @@ const {
   buildAdminSequencePayload,
   buildAdminRiskPayload
 } = require('../realtime/payloads');
+const {
+  listScenarioDefinitions,
+  getScenarioDefinition,
+  runScenario,
+  compareFalsePositive,
+  cleanupScenarioRun
+} = require('../scenarios');
 
 const router = express.Router();
 
@@ -641,6 +648,101 @@ router.get('/overview', requireAdminToken, apiRateLimiter, async (req, res) => {
     return res.status(500).json({
       error: 'internal_error',
       message: 'Failed to retrieve overview metrics'
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Admin Demo & Attack Simulation Endpoints (Module 13)
+// ---------------------------------------------------------------------------
+
+/**
+ * GET /api/v1/admin/demo/scenarios
+ * Returns registered scenarios for the live demo runner.
+ */
+router.get('/demo/scenarios', requireAdminToken, apiRateLimiter, (req, res) => {
+  try {
+    const scenarios = listScenarioDefinitions();
+    return res.status(200).json({ scenarios });
+  } catch (err) {
+    return res.status(500).json({
+      error: 'internal_error',
+      message: 'Failed to retrieve scenario definitions'
+    });
+  }
+});
+
+/**
+ * POST /api/v1/admin/demo/run
+ * Executes a deterministic scenario through the real pipeline and returns dynamic results.
+ */
+router.post('/demo/run', requireAdminToken, apiRateLimiter, async (req, res) => {
+  try {
+    const { scenario_id, run_id, cleanup_before, cleanup_after } = req.body || {};
+    if (!scenario_id || typeof scenario_id !== 'string') {
+      return res.status(400).json({
+        error: 'invalid_request',
+        message: 'scenario_id is required'
+      });
+    }
+
+    const scenario = getScenarioDefinition(scenario_id);
+    if (!scenario) {
+      return res.status(404).json({
+        error: 'not_found',
+        message: `Scenario '${scenario_id}' not found`
+      });
+    }
+
+    const options = {
+      runId: run_id,
+      cleanupBefore: cleanup_before !== false,
+      cleanupAfter: cleanup_after === true
+    };
+
+    if (scenario.scenario_type === 'false_positive') {
+      const report = await compareFalsePositive(scenario.id, options);
+      return res.status(200).json({
+        success: true,
+        mode: 'false_positive',
+        result: report
+      });
+    }
+
+    const summary = await runScenario(scenario.id, options);
+    return res.status(200).json({
+      success: true,
+      mode: 'scenario',
+      result: summary
+    });
+  } catch (err) {
+    return res.status(500).json({
+      error: 'scenario_execution_failed',
+      message: err.message || 'Scenario execution failed'
+    });
+  }
+});
+
+/**
+ * POST /api/v1/admin/demo/cleanup
+ * Cleans up records owned exclusively by a specific scenario run.
+ */
+router.post('/demo/cleanup', requireAdminToken, apiRateLimiter, async (req, res) => {
+  try {
+    const { run_id, user_id } = req.body || {};
+    if (!run_id && !user_id) {
+      return res.status(400).json({
+        error: 'invalid_request',
+        message: 'run_id or user_id is required for demo cleanup'
+      });
+    }
+
+    const result = await cleanupScenarioRun({ runId: run_id, userId: user_id });
+    return res.status(200).json(result);
+  } catch (err) {
+    return res.status(500).json({
+      error: 'cleanup_failed',
+      message: err.message || 'Cleanup operation failed'
     });
   }
 });
