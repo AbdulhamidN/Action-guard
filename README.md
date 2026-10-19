@@ -6,7 +6,7 @@ ActionGuard is an open-source, self-hosted security platform designed to detect 
 
 ActionGuard aims to help applications identify potentially compromised accounts and sessions before suspicious activity results in harmful actions.
 
-**Project:** INSA Summer Camp 2026 â€” Group 2
+**Project:** INSA Summer Camp 2026 -- Group 2
 **Location:** Jimma, Ethiopia
 
 ## 1. Project Objectives
@@ -30,7 +30,7 @@ ActionGuard aims to help applications identify potentially compromised accounts 
 
 ### Explainable Risk and Policy Engine
 
-- Calculate a deterministic risk score on a 0â€“100 scale using configured signals and weights.
+- Calculate a deterministic risk score on a 0 to 100 scale using configured signals and weights.
 - Provide human-readable explanations for security decisions.
 - Apply policy rules to determine an appropriate response.
 - Support policy versioning and policy evaluation workflows where configured.
@@ -274,7 +274,7 @@ Actual permissions depend on the application's middleware, route protections, an
 
 ![Action Steps](assets/Action_steps.png)
 
-```
+
 
 ## 11. Repository Structure
 
@@ -282,26 +282,26 @@ The following is a conceptual overview of the project's intended organization. A
 
 ```text
 Action-guard/
-â”œâ”€â”€ src/                 # Backend application
-â”‚   â”œâ”€â”€ config/          # Application configuration
-â”‚   â”œâ”€â”€ database/        # Database models and migrations
-â”‚   â”œâ”€â”€ events/          # Event handling
-â”‚   â”œâ”€â”€ jobs/            # Background jobs
-â”‚   â”œâ”€â”€ middleware/      # Authentication and request protection
-â”‚   â”œâ”€â”€ realtime/        # Real-time communication
-â”‚   â”œâ”€â”€ routes/          # API routes
-â”‚   â”œâ”€â”€ services/        # Business and security logic
-â”‚   â”œâ”€â”€ storage/         # Storage integrations
-â”‚   â””â”€â”€ utils/           # Utility functions
-â”œâ”€â”€ frontend/            # Frontend application
-â”œâ”€â”€ policies/            # Policy configuration, if present
-â”œâ”€â”€ tests/               # Automated tests
-â”œâ”€â”€ e2e/                 # End-to-end tests, if present
-â”œâ”€â”€ scripts/             # Helper scripts, if present
-â”œâ”€â”€ docs/                # Project documentation
-â”œâ”€â”€ docker-compose.yml   # Container orchestration
-â”œâ”€â”€ package.json         # Backend dependencies and scripts
-â””â”€â”€ README.md            # Project overview and instructions
+|-- src/                  # Backend application
+|   |-- config/           # Application configuration
+|   |-- database/         # Database models and migrations
+|   |-- events/           # Event handling
+|   |-- jobs/             # Background jobs
+|   |-- middleware/       # Authentication and request protection
+|   |-- realtime/         # Real-time communication
+|   |-- routes/           # API routes
+|   |-- services/         # Business and security logic
+|   |-- storage/          # Storage integrations
+|   +-- utils/            # Utility functions
+|-- frontend/             # Frontend application
+|-- policies/             # Policy configuration, if present
+|-- tests/                # Automated tests
+|-- e2e/                  # End-to-end tests, if present
+|-- scripts/              # Helper scripts, if present
+|-- docs/                 # Project documentation
+|-- docker-compose.yml    # Container orchestration
+|-- package.json          # Backend dependencies and scripts
++-- README.md             # Project overview and instructions
 ```
 
 ## 12. Documentation
@@ -310,14 +310,14 @@ Consult the documentation available in the repository for more detail on the sys
 
 Relevant documents may include:
 
-- `docs/requirements.md` â€” project requirements.
-- `docs/architecture.md` â€” architecture and component relationships.
-- `docs/security-model.md` â€” security assumptions and protections.
-- `docs/api-contract.md` â€” API interfaces and expected behavior.
-- `docs/traceability.md` â€” mapping between requirements and implementation.
-- `docs/policy-as-code-guide.md` â€” policy configuration and evaluation.
-- `docs/DEMO.md` â€” demonstration scenarios.
-- `docs/evaluation-report.md` â€” evaluation methodology and results.
+- `docs/requirements.md` - Project requirements.
+- `docs/architecture.md` - Architecture and component relationships.
+- `docs/security-model.md` - Security assumptions and protections.
+- `docs/api-contract.md` - API interfaces and expected behavior.
+- `docs/traceability.md` - Mapping between requirements and implementation.
+- `docs/policy-as-code-guide.md` - Policy configuration and evaluation.
+- `docs/DEMO.md` - Demonstration scenarios.
+- `docs/evaluation-report.md` - Evaluation methodology and results.
 
 Only list documents that exist in the published repository.
 
@@ -357,10 +357,10 @@ MaxMind GeoLite2 data is not included in this repository and is subject to MaxMi
 
 ## 16. Team
 
-**INSA Summer Camp 2026 â€” Group 2**
+**INSA Summer Camp 2026 - Group 2**
 
-- Abdulhamid Nuri Abasimal     &#x20;
-- Adnan Muslim Juma  &#x20;
-- Hayidar Taju Jemal  &#x20;
+- Abdulhamid Nuri Abasimal
+- Adnan Muslim Juma
+- Hayidar Taju Jemal
 
 ---
