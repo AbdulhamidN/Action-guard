@@ -1,392 +1,366 @@
 # ActionGuard
 
-ActionGuard is an open-source Zero Trust security platform that helps applications continuously detect, evaluate, and contain suspicious user and account activity.
+**Continuous Zero Trust security for authenticated sessions.**
 
-## Getting Started
+ActionGuard is an open-source, self-hosted security platform designed to detect and respond to suspicious activity **after a user has logged in**. Instead of relying exclusively on login-time authentication, ActionGuard evaluates sensitive actions within an authenticated session, calculates explainable risk scores, and applies proportionate security responses.
 
-### 1. Prerequisites & Services
+ActionGuard aims to help applications identify potentially compromised accounts and sessions before suspicious activity results in harmful actions.
+
+**Project:** INSA Summer Camp 2026 â€” Group 2
+**Location:** Jimma, Ethiopia
+
+## 1. Project Objectives
+
+- Continuously evaluate risk after authentication rather than relying only on login-time checks.
+- Detect suspicious sequences of sensitive actions and potential account or session takeover.
+- Provide explainable security decisions using named risk signals and transparent scoring.
+- Apply proportionate responses based on risk, including additional verification and session containment.
+- Support self-hosted deployment and extensible application integration.
+- Evaluate implemented security behavior through automated tests and reproducible scenarios.
+
+## 2. Major Features
+
+### Risk Detection and Analysis
+
+- **Device recognition:** Use available device signals to identify unfamiliar devices.
+- **Location analysis:** Use IP and geographic information, including MaxMind GeoLite2 when configured.
+- **Impossible-travel detection:** Identify suspicious geographic changes between activities.
+- **Behavioral analysis:** Use timing heuristics and per-user behavioral baselines to identify unusual activity.
+- **Action correlation:** Group related events into time-windowed sequences for risk analysis.
+
+### Explainable Risk and Policy Engine
+
+- Calculate a deterministic risk score on a 0â€“100 scale using configured signals and weights.
+- Provide human-readable explanations for security decisions.
+- Apply policy rules to determine an appropriate response.
+- Support policy versioning and policy evaluation workflows where configured.
+
+### Session Protection and Enforcement
+
+Depending on the configured policy and implemented integration, responses may include:
+
+- Allowing an action.
+- Monitoring suspicious activity.
+- Requesting step-up verification.
+- Delaying sensitive actions using a cancellable cooling-off period.
+- Blocking actions and containing suspicious sessions.
+
+Additional session-protection capabilities include session expiration, revocation, and restricted access to sensitive operations.
+
+### Application Integration and Monitoring
+
+- Event-ingestion API for applications and services.
+- Signed outbound webhooks where configured.
+- Real-time event updates through Socket.IO.
+- User-facing and administrator-facing security views.
+- Rate limiting, request validation, security headers, and audit logging.
+
+**Note:** The availability of each capability depends on the current implementation and configuration. Refer to the source code, API contract, and tests for verification.
+
+## 3. How It Works
+
+At a high level, ActionGuard follows a continuous evaluation process:
+
+1. **Collect signals:** Receive relevant session, device, location, behavioral, and application-event information.
+2. **Correlate activity:** Examine related actions and their timing within a session.
+3. **Evaluate risk:** Calculate a score using configured signals and rules.
+4. **Explain the decision:** Identify the signals and policy conditions that influenced the result.
+5. **Apply a response:** Allow, monitor, require additional verification, delay, or block an action as configured.
+6. **Record and monitor:** Record relevant security events and make appropriate information available for monitoring and review.
+
+The intended principle is simple: **trust should be continuously evaluated, not permanently granted at login.**
+
+## 4. Technology Stack
+
+| Component                   | Technologies                                         |
+| --------------------------- | ---------------------------------------------------- |
+| Backend                     | Node.js, Express                                     |
+| Database                    | MySQL, Sequelize                                     |
+| Session and event storage   | Redis, ioredis                                       |
+| Frontend                    | React, Vite, Tailwind CSS                            |
+| Real-time communication     | Socket.IO                                            |
+| Security and authentication | JWT, bcrypt, Helmet                                  |
+| Geographic analysis         | MaxMind GeoLite2                                     |
+| Testing                     | Jest, Supertest, Vitest, Testing Library, Playwright |
+| Deployment                  | Docker Compose                                       |
+| Version control             | Git and GitHub                                       |
+
+The risk and policy engines use rule-based logic rather than requiring a machine-learning model. This design supports transparent scoring and traceable decisions.
+
+Verify the listed libraries against the current project dependencies before publishing.
+
+## 5. Requirements
+
+Depending on the deployment method, you may need:
+
+- Node.js 20 or newer.
+- npm.
+- MySQL 8.
+- Redis 7.
+- Docker and Docker Compose, if using containers.
+- A MaxMind GeoLite2 City database file if geographic signals are enabled.
+
+Use the versions and services supported by the current project configuration.
+
+## 6. Installation and Setup
+
+### Clone the repository
 
 ```bash
-npm install
-docker compose up
+git clone https://github.com/AbdulhamidN/Action-guard.git
+cd Action-guard
 ```
 
-### 2. Running the Backend & Frontend
+### Install dependencies
 
-**Backend API & Real-Time Engine (port 3000):**
+```bash
+npm ci
+cd frontend
+npm ci
+cd ..
+```
+
+### Configure environment variables
+
+If the repository includes an `.env.example` file, copy it to `.env` and configure the required values.
+
+On Windows PowerShell:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+On Linux or macOS:
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env` locally. Generate unique secrets for the application rather than reusing example values.
+
+### Start the supporting services
+
+To start only the MySQL and Redis services defined in Docker Compose:
+
+```bash
+docker compose up -d mysql redis
+```
+
+To start all services defined in Compose, including the application:
+
+```bash
+docker compose up -d --build
+```
+
+The Compose configuration requires the relevant environment variables to be set. Consult the configuration section below before starting the services.
+
+**Database setup:** Run the project's actual database initialization or migration procedure before using the application if the database has not already been initialized. Follow the migration instructions provided by the repository; do not assume an unverified migration command.
+
+## 7. Configuration
+
+ActionGuard uses environment variables to configure its application and supporting services. The following table describes the principal variables; the actual required values depend on the current implementation.
+
+| Variable                           | Purpose                                                              |
+| ---------------------------------- | -------------------------------------------------------------------- |
+| `PORT`                             | Application listening port                                           |
+| `NODE_ENV`                         | Runtime environment                                                  |
+| `DB_HOST`                          | MySQL hostname                                                       |
+| `DB_USER`                          | MySQL application username                                           |
+| `DB_PASSWORD`                      | MySQL application password                                           |
+| `DB_NAME`                          | Database name                                                        |
+| `DB_ROOT_PASSWORD`                 | MySQL root password for Docker initialization                        |
+| `REDIS_URL`                        | Redis connection URL                                                 |
+| `JWT_SECRET`                       | Secret used for JWT signing                                          |
+| `ACTIONGUARD_ADMIN_API_KEY`        | Administrator authentication key                                     |
+| `API_KEY`                          | Service authentication for supported event API endpoints             |
+| `WEBHOOK_SECRET_ENCRYPTION_KEY`    | Key used to encrypt webhook secrets                                  |
+| `MAXMIND_DB_PATH`                  | Path to the optional GeoLite2 City database                          |
+| `SERVE_FRONTEND`                   | Controls serving the built frontend from the backend, if supported   |
+| `CORS_ALLOWED_ORIGINS`             | Allowed frontend origins, according to the application configuration |
+| `STEP_UP_VERIFICATION_PRIVATE_KEY` | Private key for step-up verification where required                  |
+| `STEP_UP_VERIFICATION_PUBLIC_KEY`  | Public key for step-up verification where required                   |
+| `ACTIONGUARD_DEMO_MODE`            | Controls supported demonstration behavior                            |
+
+Check the application's configuration code and example environment file for the complete list of supported variables, their defaults, and which are mandatory.
+
+### Security requirements
+
+- Never commit `.env` or files containing real credentials.
+- Use unique, randomly generated secrets.
+- Keep private keys private.
+- Use appropriate production configuration and HTTPS when deploying outside a trusted local environment.
+- Restrict database and Redis access to trusted services.
+- Replace exposed credentials immediately.
+- Review security logs and access policies before exposing the application to untrusted networks.
+
+## 8. Running the Application
+
+Use the commands defined by the current `package.json` scripts.
+
+### Backend
+
 ```bash
 npm start
-# or with file watching:
+```
+
+For backend development, if configured:
+
+```bash
 npm run dev
 ```
 
-**Frontend Development Shell (Vite dev server on port 5173 with proxy to backend):**
+The backend is expected to listen on port `3000` unless configured otherwise.
+
+### Frontend development
+
 ```bash
 npm run dev:frontend
 ```
 
-**Production Build & Serving:**
-```bash
-# Build frontend bundle into frontend/dist:
-npm run build:frontend
+The Vite development server is expected to use port `5173` unless configured otherwise.
 
-# Serve compiled SPA and backend on port 3000:
-SERVE_FRONTEND=true npm start
+### Production frontend build
+
+```bash
+npm run build:frontend
 ```
 
-### 3. Testing & Verification
+If the backend supports serving the built frontend:
 
-**Backend Unit & Integration Tests:**
+```bash
+```
+
+Set `SERVE_FRONTEND=true` in the application's environment and start the backend using the documented production command.
+
+### Running tests
+
+Backend tests:
+
 ```bash
 npm test
 ```
 
-**Frontend Unit & Integration Tests (Vitest):**
+Frontend tests:
+
 ```bash
-cd frontend && npm test
+cd frontend
+npm test
 ```
 
-**End-to-End Browser Tests (Playwright):**
-```bash
-# Setup from a clean checkout:
-npm --prefix frontend install
-npx --prefix frontend playwright install chromium
+End-to-end tests, if configured:
 
-# Run E2E test suite:
+```bash
+cd ..
 npm run test:e2e
 ```
 
-**API Fixture Drift Protection & Regeneration:**
-- In-memory verification (default, does not modify files on disk):
-  ```bash
-  npm test -- tests/api-fixtures-capture.test.js
-  ```
-- Intentional regeneration (requires explicit opt-in):
-  ```bash
-  REGENERATE_FIXTURES=true npm test -- tests/api-fixtures-capture.test.js
-  # or directly:
-  node scripts/generate-api-examples.js
-  ```
+These commands assume the corresponding scripts exist in the repository. Check `package.json` and the frontend's `package.json` before relying on them.
+
+## 9. Access Levels
+
+ActionGuard supports different categories of access according to its implemented routes and authentication configuration.
+
+| Caller             | Intended access                                                           |
+| ------------------ | ------------------------------------------------------------------------- |
+| Anonymous visitor  | Public endpoints, such as supported health, registration, or login routes |
+| Authenticated user | Authorized personal data and actions                                      |
+| Administrator      | Authorized administrative views and monitoring                            |
+| Integrated service | Supported event-ingestion or service API endpoints                        |
+
+Actual permissions depend on the application's middleware, route protections, and configured credentials. Review the API contract and security model for endpoint-level details.
+
+## 10. Implementation Evidence
 
 
+![Action Steps](assets/Action_steps.png)
 
-Instead of trusting a user or session after authentication, ActionGuard continuously evaluates the security context of sessions and sensitive actions using signals such as device, location, behavior, timing, and recent activity.
-
-Based on the current risk, ActionGuard can allow, monitor, require re-verification, delay, or block an action. It also provides explainable security decisions for both users and administrators.
-
-## Core Principles
-
-* **Never Trust, Always Verify** — authentication does not create permanent trust.
-* **Continuous Verification** — security risk is continuously evaluated throughout a session.
-* **Per-Action Authorization** — sensitive actions are individually evaluated.
-* **Assume Breach** — the system limits the impact of compromised accounts and sessions.
-* **Risk-Based Access Control** — security requirements increase as risk increases.
-* **Least Privilege** — elevated access is limited to what is needed and for a limited time.
-* **Explainable Security** — security decisions provide understandable reasons.
-* **Open Integration** — applications can integrate with ActionGuard through APIs and security events.
-* **Self-Hosted** — organizations can deploy and control their own ActionGuard instance.
-
-## How ActionGuard Works
-
-```text
-Protected Application
-        │
-        │ Security Events
-        ▼
-┌─────────────────────────────┐
-│         ActionGuard         │
-│                             │
-│   Event Logging             │
-│          ↓                  │
-│   Signal Collection         │
-│          ↓                  │
-│   Behavioral Analysis       │
-│          ↓                  │
-│   Risk Scoring              │
-│          ↓                  │
-│   Policy Decision (PDP)     │
-│          ↓                  │
-│   Policy Enforcement (PEP)  │
-└─────────────┬───────────────┘
-              │
-              ▼
-      Security Decision
-
- Allow │ Monitor │ Reverify │ Delay │ Block
 ```
 
-## Main Capabilities
+## 11. Repository Structure
 
-### Zero Trust & Access Control
-
-* Continuous verification and risk monitoring
-* Per-action authorization
-* Risk-based and adaptive access control
-* Attribute-Based Access Control (ABAC)
-* Action-level security controls
-* Just-in-time privilege elevation
-* Short-lived trust and authorization
-* Trusted-device and trusted-network support
-
-### Risk & Threat Intelligence
-
-* Risk scoring
-* Device fingerprinting
-* IP and geolocation intelligence
-* Impossible-travel detection
-* Personal behavioral baselines
-* Bot and automation detection
-* Cross-session anomaly detection
-* Cross-platform risk intelligence
-* Attack-pattern and campaign correlation
-* Blast-radius awareness
-* Combined-signal risk escalation
-
-### Session Protection
-
-* Idle-session timeout
-* Maximum session lifetime
-* Continuous session monitoring
-* Sensitive-action re-verification
-* Automatic expiration of temporary trust and privileges
-
-### Security Response
-
-ActionGuard adapts its response to the current risk:
+The following is a conceptual overview of the project's intended organization. Adjust it to match the actual directories and files in the repository.
 
 ```text
-Low Risk
-   ↓
-Allow / Minimal Friction
-
-Medium Risk
-   ↓
-Monitor / Re-verify
-
-High Risk
-   ↓
-Delay / Strong Verification
-
-Critical Risk
-   ↓
-Block / Contain
+Action-guard/
+â”œâ”€â”€ src/                 # Backend application
+â”‚   â”œâ”€â”€ config/          # Application configuration
+â”‚   â”œâ”€â”€ database/        # Database models and migrations
+â”‚   â”œâ”€â”€ events/          # Event handling
+â”‚   â”œâ”€â”€ jobs/            # Background jobs
+â”‚   â”œâ”€â”€ middleware/      # Authentication and request protection
+â”‚   â”œâ”€â”€ realtime/        # Real-time communication
+â”‚   â”œâ”€â”€ routes/          # API routes
+â”‚   â”œâ”€â”€ services/        # Business and security logic
+â”‚   â”œâ”€â”€ storage/         # Storage integrations
+â”‚   â””â”€â”€ utils/           # Utility functions
+â”œâ”€â”€ frontend/            # Frontend application
+â”œâ”€â”€ policies/            # Policy configuration, if present
+â”œâ”€â”€ tests/               # Automated tests
+â”œâ”€â”€ e2e/                 # End-to-end tests, if present
+â”œâ”€â”€ scripts/             # Helper scripts, if present
+â”œâ”€â”€ docs/                # Project documentation
+â”œâ”€â”€ docker-compose.yml   # Container orchestration
+â”œâ”€â”€ package.json         # Backend dependencies and scripts
+â””â”€â”€ README.md            # Project overview and instructions
 ```
 
-Administrators can configure responses for individual signals and combinations of signals.
+## 12. Documentation
 
-### Explainability & Security Operations
+Consult the documentation available in the repository for more detail on the system's design, requirements, interfaces, and security assumptions.
 
-* Simple explanations for users
-* Detailed explanations for administrators
-* Interactive security-decision and signal visualization
-* Proactive threat hunting
-* Security event and decision auditing
+Relevant documents may include:
 
-### Integration & Extensibility
+- `docs/requirements.md` â€” project requirements.
+- `docs/architecture.md` â€” architecture and component relationships.
+- `docs/security-model.md` â€” security assumptions and protections.
+- `docs/api-contract.md` â€” API interfaces and expected behavior.
+- `docs/traceability.md` â€” mapping between requirements and implementation.
+- `docs/policy-as-code-guide.md` â€” policy configuration and evaluation.
+- `docs/DEMO.md` â€” demonstration scenarios.
+- `docs/evaluation-report.md` â€” evaluation methodology and results.
 
-* REST APIs
-* Webhooks
-* Open security-event schema
-* Policy-as-code
-* Historical policy replay testing
-* Community risk-signal plugins
-* Self-hosted deployment
-* Signed short-lived trust assertions
+Only list documents that exist in the published repository.
 
-## Account-Takeover Protection
+## 13. Testing and Evaluation
 
-ActionGuard is designed to help detect and contain suspicious activity after an attacker obtains valid account credentials.
+ActionGuard should be evaluated using automated tests and reproducible scenarios covering the security behaviors it implements.
 
-For example:
+Relevant evaluation areas include:
 
-```text
-Valid Login
-     ↓
-New Device
-     ↓
-Unusual Location
-     ↓
-Recovery Email Change
-     ↓
-Password Change
-     ↓
-High-Impact Action
-```
+- Risk-score calculation and explanation.
+- Policy decisions for different activity patterns.
+- Authentication and session protection.
+- Step-up verification and enforcement.
+- API validation and access control.
+- Event logging and session revocation.
+- Frontend behavior and end-to-end flows.
 
-ActionGuard does not necessarily treat these events as isolated incidents. It can correlate them into a sequence and evaluate the overall risk.
+Run the available tests and report the actual results before submission. Scripted scenarios help validate expected behavior but do not establish effectiveness against every real-world attacker.
 
-As suspicious evidence increases, ActionGuard can increase the required security response and intervene before a high-impact action becomes irreversible.
+## 14. Limitations
 
-ActionGuard does not claim to guarantee prevention of every account takeover. Its goal is to **detect and contain risky account activity before significant damage occurs**.
+ActionGuard is a security project and should not be treated as a guarantee of protection.
 
-## Architecture
+- Detection quality depends on available signals, configured thresholds, and policy rules.
+- An attacker using a victim's legitimate device and behaving normally may evade some behavioral checks.
+- Scripted evaluations do not fully represent real-world attack patterns.
+- Production deployment requires careful configuration, monitoring, testing, and security review.
+- Shared administrator credentials, where used, provide less accountability than individual administrator identities.
+- Email delivery and external integrations require their own configuration when not enabled by default.
+- The project has not been independently security-audited unless a separate audit report is explicitly provided.
 
-ActionGuard separates security decision-making from security enforcement.
+## 15. License
 
-```text
-                    ActionGuard
-                         │
-          ┌──────────────┴──────────────┐
-          │                             │
-   Policy Decision Point          Policy Enforcement Point
-          │                             │
-    ┌─────┴─────┐                 ┌─────┴─────┐
-    │            │                 │           │
-Risk Engine  Policy Engine     Middleware  Verification
-    │            │                 │           │
-    └─────┬──────┘                 └─────┬─────┘
-          │                              │
-          └────────── Decision ──────────┘
-```
+This project is licensed under the MIT License. Please check the repository's [LICENSE](LICENSE) file for the full applicable license terms.
 
-The separation allows risk evaluation and policy decisions to remain independent from the application enforcement layer.
+MaxMind GeoLite2 data is not included in this repository and is subject to MaxMind's applicable terms.
 
-## Project Structure
+## 16. Team
 
-```text
-ActionGuard/
-│
-├── docs/
-│   ├── requirements.md
-│   ├── architecture.md
-│   ├── security-model.md
-│   ├── api-contract.md
-│   └── development-plan.md
-│
-├── AGENTS.md
-├── README.md
-│
-├── frontend/
-├── backend/
-├── detection-service/
-├── database/
-├── docker/
-└── ...
-```
+**INSA Summer Camp 2026 â€” Group 2**
 
-The implementation structure may evolve during development.
+- Abdulhamid Nuri Abasimal     &#x20;
+- Adnan Muslim Juma  &#x20;
+- Hayidar Taju Jemal  &#x20;
 
-## Development Modules
-
-Development is organized into the following modules:
-
-1. **Foundation**
-2. **Event Logging & Audit Trail**
-3. **Signal Collectors**
-4. **Personal Behavioral Baseline**
-5. **Action Correlation Engine**
-6. **Risk Scoring Engine**
-7. **Real-Time Layer**
-8. **Policy Engine & Response Tiers**
-9. **Policy-as-Code & Replay Testing**
-10. **Enforcement Layer**
-11. **Hardening & Integration**
-12. **Dashboard & Explainability**
-13. **Attack Simulation & Demo Scenarios**
-
-Each module builds on the capabilities established by the previous modules.
-
-## Technology
-
-### Frontend
-
-* React
-* Vite
-* Tailwind CSS
-* Recharts
-* React Flow
-* Socket.IO Client
-
-### Backend
-
-* Node.js
-* Express
-* Socket.IO
-
-### Database & State
-
-* MySQL
-* Redis
-
-### Security & Risk Analysis
-
-* Device fingerprinting
-* IP/geolocation analysis
-* Behavioral baseline analysis
-* Risk scoring
-* Policy evaluation
-
-### Authentication & Security
-
-* JWT
-* bcrypt
-* Helmet
-* Rate limiting
-* Input validation
-* Step-up verification
-
-### Testing
-
-* Jest
-* Supertest
-* Playwright
-
-### DevOps
-
-* Docker
-* Docker Compose
-* GitHub Actions
-
-## Documentation
-
-Detailed documentation is available in the `docs/` directory.
-
-| Document              | Description                                              |
-| --------------------- | -------------------------------------------------------- |
-| `requirements.md`     | Defines the functional and non-functional requirements   |
-| `architecture.md`     | Describes the system architecture and components         |
-| `security-model.md`   | Describes the security principles and protection model   |
-| `api-contract.md`     | Defines the API and integration contract                 |
-| `development-plan.md` | Defines the development modules and implementation order |
-
-## Project Status
-
-**Active Development**
-
-ActionGuard is being developed as an open-source security project with an incremental implementation approach.
-
-The project focuses on continuous security evaluation, account and session compromise detection, risk-based decisions, policy enforcement, explainability, and integration with existing applications.
-
-## Security Scope
-
-ActionGuard is designed to detect, evaluate, and contain suspicious activity within protected applications.
-
-It is intended to work alongside existing security controls such as:
-
-* Strong authentication
-* Multi-factor authentication
-* Secure credential management
-* Secure application development
-* Network and endpoint security
-* Organizational security policies
-* Incident response processes
-
-ActionGuard is not intended to replace these security controls.
-
-## Open Source
-
-ActionGuard is designed to be self-hosted, extensible, and reusable by applications that need continuous security evaluation.
-
-The project aims to provide reusable security components, documented integration interfaces, extensible risk signals, and explainable security decisions.
-
-## Team
-
-Developed by **Group 2**, INSA Summer Camp 2026 — Jimma, Ethiopia
-
-- Abdulhamid Nuri Abasimal
-- Adnan Muslim Juma
-- Hayidar Taju Jemal
-
-## License
-
-License information will be added when the project license is finalized.
+---
