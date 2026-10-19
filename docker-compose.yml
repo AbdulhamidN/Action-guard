@@ -9,11 +9,13 @@ services:
       - NODE_ENV=production
       - PORT=3000
       - DB_HOST=mysql
-      - DB_USER=actionguard
-      - DB_PASSWORD=actionguard_secret
-      - DB_NAME=actionguard
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_NAME=${DB_NAME}
       - REDIS_URL=redis://redis:6379
-      - JWT_SECRET=change_this_to_a_secure_jwt_secret
+      - JWT_SECRET=${JWT_SECRET}
+      - ACTIONGUARD_ADMIN_API_KEY=${ACTIONGUARD_ADMIN_API_KEY}
+      - WEBHOOK_SECRET_ENCRYPTION_KEY=${WEBHOOK_SECRET_ENCRYPTION_KEY}
       - MAXMIND_DB_PATH=${MAXMIND_DB_PATH:-/app/data/GeoLite2-City.mmdb}
     volumes:
       - ./data:/app/data:ro
@@ -47,3 +49,5 @@ services:
 volumes:
   mysql_data:
   redis_data:
+
+
