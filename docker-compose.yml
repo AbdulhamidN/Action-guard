@@ -1,22 +1,20 @@
-version: '3.8'
-
 services:
   app:
     build: .
     ports:
       - "${PORT:-3000}:3000"
     environment:
-      - NODE_ENV=production
-      - PORT=3000
-      - DB_HOST=mysql
-      - DB_USER=${DB_USER}
-      - DB_PASSWORD=${DB_PASSWORD}
-      - DB_NAME=${DB_NAME}
-      - REDIS_URL=redis://redis:6379
-      - JWT_SECRET=${JWT_SECRET}
-      - ACTIONGUARD_ADMIN_API_KEY=${ACTIONGUARD_ADMIN_API_KEY}
-      - WEBHOOK_SECRET_ENCRYPTION_KEY=${WEBHOOK_SECRET_ENCRYPTION_KEY}
-      - MAXMIND_DB_PATH=${MAXMIND_DB_PATH:-/app/data/GeoLite2-City.mmdb}
+      NODE_ENV: production
+      PORT: "3000"
+      DB_HOST: mysql
+      DB_USER: ${DB_USER:?Set DB_USER in .env}
+      DB_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
+      DB_NAME: ${DB_NAME:?Set DB_NAME in .env}
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
+      ACTIONGUARD_ADMIN_API_KEY: ${ACTIONGUARD_ADMIN_API_KEY:?Set ACTIONGUARD_ADMIN_API_KEY in .env}
+      WEBHOOK_SECRET_ENCRYPTION_KEY: ${WEBHOOK_SECRET_ENCRYPTION_KEY:?Set WEBHOOK_SECRET_ENCRYPTION_KEY in .env}
+      MAXMIND_DB_PATH: ${MAXMIND_DB_PATH:-/app/data/GeoLite2-City.mmdb}
     volumes:
       - ./data:/app/data:ro
     depends_on:
@@ -27,21 +25,17 @@ services:
   mysql:
     image: mysql:8.0
     command: --default-authentication-plugin=mysql_native_password
-    ports:
-      - "3307:3306"
     environment:
-      MYSQL_ROOT_PASSWORD: root_password
-      MYSQL_DATABASE: actionguard
-      MYSQL_USER: actionguard
-      MYSQL_PASSWORD: actionguard_secret
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?Set DB_ROOT_PASSWORD in .env}
+      MYSQL_DATABASE: ${DB_NAME:?Set DB_NAME in .env}
+      MYSQL_USER: ${DB_USER:?Set DB_USER in .env}
+      MYSQL_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
     volumes:
       - mysql_data:/var/lib/mysql
     restart: unless-stopped
 
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
     volumes:
       - redis_data:/data
     restart: unless-stopped
@@ -49,5 +43,3 @@ services:
 volumes:
   mysql_data:
   redis_data:
-
-
