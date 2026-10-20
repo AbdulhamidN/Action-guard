@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { apiRequest, ApiError } from '../services/apiClient.js';
 import { setUserToken } from '../services/authStorage.js';
 import { getDeviceFingerprint } from '../services/fingerprint.js';
@@ -13,6 +13,8 @@ import { Spinner } from '../components/common/Spinner.jsx';
  */
 export function UserLoginPage() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const justRegistered = Boolean(location.state?.registered);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -69,6 +71,12 @@ export function UserLoginPage() {
             ActionGuard Zero Trust User Session Authentication
           </p>
         </div>
+
+        {justRegistered && !error && (
+          <div className="rounded-md bg-emerald-50 border border-emerald-200 p-3 text-sm text-emerald-800" data-testid="registered-notice">
+            Account created. Please sign in.
+          </div>
+        )}
 
         {error && (
           <ErrorBanner
@@ -127,6 +135,13 @@ export function UserLoginPage() {
             </button>
           </div>
         </form>
+
+        <p className="text-center text-sm text-gray-600">
+          No account yet?{' '}
+          <Link to="/signup" className="font-medium text-indigo-600 hover:text-indigo-700" data-testid="signup-link">
+            Sign up
+          </Link>
+        </p>
       </div>
     </div>
   );

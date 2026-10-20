@@ -1,0 +1,116 @@
+diff -ru orig/frontend/src/App.jsx Action-guard-main/frontend/src/App.jsx
+--- orig/frontend/src/App.jsx	2026-10-19 16:57:15.027855231 +0000
++++ Action-guard-main/frontend/src/App.jsx	2026-10-20 09:23:44.431529092 +0000
+@@ -1,7 +1,9 @@
+ import React from 'react';
+-import { Routes, Route, Navigate } from 'react-router-dom';
++import { Routes, Route } from 'react-router-dom';
+ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
++import { LandingPage } from './pages/LandingPage.jsx';
+ import { UserLoginPage } from './pages/UserLoginPage.jsx';
++import { UserSignupPage } from './pages/UserSignupPage.jsx';
+ import { AdminLoginPage } from './pages/AdminLoginPage.jsx';
+ import { UserShell } from './pages/UserShell.jsx';
+ import { AdminShell } from './pages/AdminShell.jsx';
+@@ -23,8 +25,9 @@
+   return (
+     <QueryClientProvider client={queryClient}>
+       <Routes>
+-        <Route path="/" element={<Navigate to="/app" replace />} />
++        <Route path="/" element={<LandingPage />} />
+         <Route path="/login" element={<UserLoginPage />} />
++        <Route path="/signup" element={<UserSignupPage />} />
+         <Route path="/admin/login" element={<AdminLoginPage />} />
+ 
+         {/* Protected User Shell */}
+Only in Action-guard-main/frontend/src/components/user: OverviewTab.jsx
+Only in Action-guard-main/frontend/src/pages: LandingPage.jsx
+diff -ru orig/frontend/src/pages/UserLoginPage.jsx Action-guard-main/frontend/src/pages/UserLoginPage.jsx
+--- orig/frontend/src/pages/UserLoginPage.jsx	2026-10-19 16:57:15.030085488 +0000
++++ Action-guard-main/frontend/src/pages/UserLoginPage.jsx	2026-10-19 16:57:15.114454233 +0000
+@@ -1,5 +1,5 @@
+ import React, { useState } from 'react';
+-import { useNavigate } from 'react-router-dom';
++import { Link, useLocation, useNavigate } from 'react-router-dom';
+ import { apiRequest, ApiError } from '../services/apiClient.js';
+ import { setUserToken } from '../services/authStorage.js';
+ import { getDeviceFingerprint } from '../services/fingerprint.js';
+@@ -13,6 +13,8 @@
+  */
+ export function UserLoginPage() {
+   const navigate = useNavigate();
++  const location = useLocation();
++  const justRegistered = Boolean(location.state?.registered);
+   const [email, setEmail] = useState('');
+   const [password, setPassword] = useState('');
+   const [loading, setLoading] = useState(false);
+@@ -70,6 +72,12 @@
+           </p>
+         </div>
+ 
++        {justRegistered && !error && (
++          <div className="rounded-md bg-emerald-50 border border-emerald-200 p-3 text-sm text-emerald-800" data-testid="registered-notice">
++            Account created. Please sign in.
++          </div>
++        )}
++
+         {error && (
+           <ErrorBanner
+             message={error.message}
+@@ -127,6 +135,13 @@
+             </button>
+           </div>
+         </form>
++
++        <p className="text-center text-sm text-gray-600">
++          No account yet?{' '}
++          <Link to="/signup" className="font-medium text-indigo-600 hover:text-indigo-700" data-testid="signup-link">
++            Sign up
++          </Link>
++        </p>
+       </div>
+     </div>
+   );
+diff -ru orig/frontend/src/pages/UserShell.jsx Action-guard-main/frontend/src/pages/UserShell.jsx
+--- orig/frontend/src/pages/UserShell.jsx	2026-10-19 16:57:15.030110983 +0000
++++ Action-guard-main/frontend/src/pages/UserShell.jsx	2026-10-19 16:57:15.114841488 +0000
+@@ -7,6 +7,7 @@
+ import { apiRequest } from '../services/apiClient.js';
+ import { clearUserToken } from '../services/authStorage.js';
+ import { clearAllCancellationTokens } from '../services/cancellationStorage.js';
++import { OverviewTab } from '../components/user/OverviewTab.jsx';
+ import { SessionsTab } from '../components/user/SessionsTab.jsx';
+ import { DevicesTab } from '../components/user/DevicesTab.jsx';
+ import { HistoryTab } from '../components/user/HistoryTab.jsx';
+@@ -133,6 +134,19 @@
+           <nav className="-mb-px flex space-x-8" aria-label="Tabs" data-testid="portal-tabs">
+             <button
+               type="button"
++              onClick={() => setActiveTab('overview')}
++              className={`whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm focus:outline-none ${
++                activeTab === 'overview'
++                  ? 'border-indigo-600 text-indigo-600'
++                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
++              }`}
++              data-testid="tab-overview"
++            >
++              Overview
++            </button>
++
++            <button
++              type="button"
+               onClick={() => setActiveTab('sessions')}
+               className={`whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm focus:outline-none ${
+                 activeTab === 'sessions'
+@@ -200,6 +214,8 @@
+ 
+         {/* Active Tab Panel */}
+         <div className="pt-2">
++          {activeTab === 'overview' && <OverviewTab />}
++
+           {activeTab === 'sessions' && (
+             <SessionsTab currentSessionId={currentSessionId} onSessionTerminated={loadUserProfile} />
+           )}
+Only in Action-guard-main/frontend/src/pages: UserSignupPage.jsx
+Only in Action-guard-main/frontend/src/tests: landingPage.vitest.jsx
+Only in Action-guard-main/frontend/src/tests: userSignup.vitest.jsx

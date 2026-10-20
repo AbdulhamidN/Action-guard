@@ -7,6 +7,7 @@ import { ErrorBanner } from '../components/common/ErrorBanner.jsx';
 import { apiRequest } from '../services/apiClient.js';
 import { clearUserToken } from '../services/authStorage.js';
 import { clearAllCancellationTokens } from '../services/cancellationStorage.js';
+import { OverviewTab } from '../components/user/OverviewTab.jsx';
 import { SessionsTab } from '../components/user/SessionsTab.jsx';
 import { DevicesTab } from '../components/user/DevicesTab.jsx';
 import { HistoryTab } from '../components/user/HistoryTab.jsx';
@@ -133,6 +134,19 @@ export function UserShell() {
           <nav className="-mb-px flex space-x-8" aria-label="Tabs" data-testid="portal-tabs">
             <button
               type="button"
+              onClick={() => setActiveTab('overview')}
+              className={`whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm focus:outline-none ${
+                activeTab === 'overview'
+                  ? 'border-indigo-600 text-indigo-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+              data-testid="tab-overview"
+            >
+              Overview
+            </button>
+
+            <button
+              type="button"
               onClick={() => setActiveTab('sessions')}
               className={`whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm focus:outline-none ${
                 activeTab === 'sessions'
@@ -200,6 +214,8 @@ export function UserShell() {
 
         {/* Active Tab Panel */}
         <div className="pt-2">
+          {activeTab === 'overview' && <OverviewTab />}
+
           {activeTab === 'sessions' && (
             <SessionsTab currentSessionId={currentSessionId} onSessionTerminated={loadUserProfile} />
           )}
