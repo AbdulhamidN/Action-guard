@@ -1,0 +1,32 @@
+{
+  "users": [
+    {
+      "id": "usr_fixture_admin_demo_01",
+      "email": "alex.security@actionguard.test",
+      "created_at": "2026-10-18T06:07:29.000Z",
+      "locked_until": null,
+      "latest_risk_tier": "critical",
+      "latest_risk_at": "2026-10-18T06:32:29.773Z",
+      "active_sessions": 1
+    },
+    {
+      "id": "usr_fixture_contained_03",
+      "email": "contained.target@actionguard.test",
+      "created_at": "2026-10-18T06:07:29.000Z",
+      "locked_until": "2026-10-18T06:52:29.773Z",
+      "latest_risk_tier": null,
+      "latest_risk_at": null,
+      "active_sessions": 0
+    },
+    {
+      "id": "usr_fixture_standard_02",
+      "email": "sam.operator@actionguard.test",
+      "created_at": "2026-10-18T06:07:29.000Z",
+      "locked_until": null,
+      "latest_risk_tier": "high",
+      "latest_risk_at": "2026-10-18T06:27:29.773Z",
+      "active_sessions": 1
+    }
+  ],
+  "total": 3
+}

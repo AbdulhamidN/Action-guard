@@ -1,0 +1,354 @@
+const express = require('express');
+const bcrypt = require('bcrypt');
+const jwt = require('jsonwebtoken');
+const { User } = require('../database/models');
+const { sendError } = require('../utils/errors');
+const { JWT_SECRET, getJwtSecret, authenticateToken } = require('../middleware/auth');
+const { deriveNoveltyFlags } = require('../services/riskEngineService');
+const {
+  createSession,
+  invalidateSession,
+  DEFAULT_SESSION_TTL_SECONDS
+} = require('../services/sessionService');
+const { MAX_SESSION_LIFETIME_SECONDS } = require('../config/sessionConfig');
+const { recordSecurityEvent } = require('../services/eventService');
+const {
+  validateDeviceFingerprint,
+  getOrCreateDevice
+} = require('../services/deviceService');
+const { normalizeIp } = require('../utils/ip');
+const geoService = require('../services/geoService');
+const { collectTravelAnomalySignal } = require('../collectors/travelCollector');
+const { collectBotSignal } = require('../collectors/botCollector');
+const { collectBaselineDeviationSignal } = require('../collectors/baselineCollector');
+
+const { VALIDATION_LIMITS } = require('../middleware/validation');
+
+const router = express.Router();
+const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || `${MAX_SESSION_LIFETIME_SECONDS}s`;
+
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function extractRequestContext(req, explicitFingerprint = null) {
+  const rawIp = req.ip || req.socket?.remoteAddress || null;
+  const ip = normalizeIp(rawIp) || (typeof rawIp === 'string' ? rawIp.trim() : null);
+
+  const context = {
+    ip_address: ip,
+    user_agent: req.headers['user-agent'] || null
+  };
+
+  const fingerprint = explicitFingerprint || (req.session && req.session.device_fingerprint) || null;
+  if (fingerprint) {
+    context.device_fingerprint = fingerprint;
+  }
+
+  return context;
+}
+
+async function extractLoginRequestContext(req, explicitFingerprint = null) {
+  const context = extractRequestContext(req, explicitFingerprint);
+  if (context.ip_address) {
+    const geo = await geoService.resolveGeoLocation(context.ip_address);
+    if (geo.geo_country) {
+      context.geo_country = geo.geo_country;
+    }
+    if (geo.geo_region) {
+      context.geo_region = geo.geo_region;
+    }
+  }
+  return context;
+}
+
+/**
+  * POST /api/v1/auth/signup
+  */
+router.post('/signup', async (req, res) => {
+  try {
+    const { email, password } = req.body || {};
+
+    if (
+      !email ||
+      typeof email !== 'string' ||
+      email.trim().length > VALIDATION_LIMITS.MAX_EMAIL_LENGTH ||
+      !EMAIL_REGEX.test(email.trim())
+    ) {
+      return sendError(res, 400, 'invalid_request', 'A valid email address is required');
+    }
+
+    if (!password || typeof password !== 'string' || password.length < 6) {
+      return sendError(
+        res,
+        400,
+        'invalid_request',
+        'Password must be at least 6 characters long'
+      );
+    }
+
+    if (password.length > VALIDATION_LIMITS.MAX_PASSWORD_LENGTH) {
+      return sendError(
+        res,
+        400,
+        'invalid_request',
+        `Password must not exceed ${VALIDATION_LIMITS.MAX_PASSWORD_LENGTH} characters`
+      );
+    }
+
+    const normalizedEmail = email.toLowerCase().trim();
+
+    // Check for existing user
+    const existingUser = await User.findOne({ where: { email: normalizedEmail } });
+    if (existingUser) {
+      return sendError(res, 400, 'duplicate_email', 'A user with this email already exists');
+    }
+
+    // Hash password
+    const saltRounds = 10;
+    const passwordHash = await bcrypt.hash(password, saltRounds);
+
+    // Create user
+    const newUser = await User.create({
+      email: normalizedEmail,
+      password_hash: passwordHash
+    });
+
+    return res.status(201).json({
+      id: newUser.id,
+      email: newUser.email
+    });
+  } catch (error) {
+    console.error('Signup error:', error);
+    return sendError(res, 500, 'internal_error', 'An unexpected error occurred during signup');
+  }
+});
+
+/**
+ * POST /api/v1/auth/login
+ */
+router.post('/login', async (req, res) => {
+  try {
+    const { email, password } = req.body || {};
+
+    if (!email || !password || typeof email !== 'string' || typeof password !== 'string') {
+      return sendError(res, 400, 'invalid_request', 'Email and password are required');
+    }
+
+    if (
+      email.trim().length > VALIDATION_LIMITS.MAX_EMAIL_LENGTH ||
+      password.length > VALIDATION_LIMITS.MAX_PASSWORD_LENGTH
+    ) {
+      return sendError(
+        res,
+        400,
+        'invalid_request',
+        'Email or password exceeds maximum allowed length'
+      );
+    }
+
+    // Single request arrival timestamp and canonical source identity for the request
+    const currentTimestamp = new Date();
+    const rawIp = req.ip || req.socket?.remoteAddress || null;
+    const canonicalIp = normalizeIp(rawIp) || (typeof rawIp === 'string' ? rawIp.trim() : null);
+
+    let botSignal = null;
+    try {
+      botSignal = await collectBotSignal(canonicalIp, currentTimestamp);
+    } catch (botErr) {
+      // Safe fallback: never disrupt authentication on bot signal collection failure
+      console.warn('[Auth] Bot signal collection failed:', botErr.message);
+    }
+
+    const rawFingerprint = req.headers['x-device-fingerprint'];
+    const validFingerprint = validateDeviceFingerprint(rawFingerprint) ? rawFingerprint.trim() : null;
+
+    const normalizedEmail = email.toLowerCase().trim();
+
+    const user = await User.findOne({ where: { email: normalizedEmail } });
+    if (!user) {
+      // Run dummy compare for consistent timing against user enumeration
+      await bcrypt.compare(password, '$2b$10$abcdefghijklmnopqrstuuABCDEFGHIJKLMNOPQRSTUVWXYZ01234');
+      return sendError(res, 401, 'authentication_failed', 'Invalid email or password');
+    }
+
+    const isMatch = await bcrypt.compare(password, user.password_hash);
+    if (!isMatch) {
+      const loginContext = await extractLoginRequestContext(req, validFingerprint);
+      const failedMetadata = {};
+      if (botSignal) {
+        failedMetadata.bot_detection = botSignal;
+      }
+      await recordSecurityEvent({
+        userId: user.id,
+        eventType: 'login_failed',
+        timestamp: currentTimestamp,
+        context: loginContext,
+        metadata: failedMetadata
+      });
+      // Generic error - do not reveal password was wrong
+      return sendError(res, 401, 'authentication_failed', 'Invalid email or password');
+    }
+
+    const { checkAccountLock } = require('../services/containmentService');
+    const lockStatus = await checkAccountLock(user, currentTimestamp);
+    if (lockStatus.locked) {
+      let isRecognizedDevice = false;
+      if (validFingerprint) {
+        const novelty = await deriveNoveltyFlags(user.id, currentTimestamp, null, validFingerprint, null);
+        isRecognizedDevice = Boolean(novelty.has_prior_device);
+      }
+
+      if (!isRecognizedDevice) {
+        const loginContext = await extractLoginRequestContext(req, validFingerprint);
+        const lockedMetadata = {
+          reason: 'account_temporarily_locked',
+          locked_until: lockStatus.lockedUntil
+        };
+        if (botSignal) {
+          lockedMetadata.bot_detection = botSignal;
+        }
+        await recordSecurityEvent({
+          userId: user.id,
+          eventType: 'login_failed',
+          timestamp: currentTimestamp,
+          context: loginContext,
+          metadata: lockedMetadata
+        });
+        return res.status(403).json({
+          error: {
+            code: 'account_temporarily_locked',
+            message: 'Account is temporarily locked due to suspicious security activity. Please try again later.',
+            retry_after_seconds: lockStatus.remainingSeconds,
+            locked_until: lockStatus.lockedUntil
+          }
+        });
+      }
+    }
+
+    let deviceData = null;
+    if (validFingerprint) {
+      const { device } = await getOrCreateDevice(user.id, validFingerprint);
+      deviceData = {
+        device_id: device.id,
+        device_fingerprint: validFingerprint
+      };
+    }
+
+    // Create session in MySQL & Redis
+    const session = await createSession(user.id, user.email, DEFAULT_SESSION_TTL_SECONDS, deviceData);
+
+    const loginContext = await extractLoginRequestContext(req, validFingerprint);
+
+    let travelAnomaly = null;
+    try {
+      travelAnomaly = await collectTravelAnomalySignal(
+        user.id,
+        loginContext.ip_address,
+        currentTimestamp
+      );
+    } catch (travelErr) {
+      // Safe fallback: never disrupt authentication on travel calculation failure
+      console.warn('[Auth] Impossible travel check failed:', travelErr.message);
+    }
+
+    let behavioralDeviation = null;
+    try {
+      behavioralDeviation = await collectBaselineDeviationSignal(
+        user.id,
+        loginContext,
+        currentTimestamp
+      );
+    } catch (baselineErr) {
+      // Safe fallback: never disrupt authentication on baseline calculation failure
+      console.warn('[Auth] Baseline deviation check failed:', baselineErr.message);
+    }
+
+    const loginMetadata = {};
+    if (travelAnomaly) {
+      loginMetadata.travel_anomaly = travelAnomaly;
+    }
+    if (botSignal) {
+      loginMetadata.bot_detection = botSignal;
+    }
+    if (behavioralDeviation) {
+      loginMetadata.behavioral_deviation = behavioralDeviation;
+    }
+
+    // Record login_success
+    await recordSecurityEvent({
+      userId: user.id,
+      sessionId: session.sessionId,
+      eventType: 'login_success',
+      timestamp: currentTimestamp,
+      context: loginContext,
+      metadata: loginMetadata
+    });
+
+    // Record session_created
+    await recordSecurityEvent({
+      userId: user.id,
+      sessionId: session.sessionId,
+      eventType: 'session_created',
+      timestamp: currentTimestamp,
+      context: extractRequestContext(req, validFingerprint)
+    });
+
+    // Issue short-lived JWT containing user id, email, and session_id
+    const tokenPayload = {
+      id: user.id,
+      email: user.email,
+      session_id: session.sessionId
+    };
+
+    const tokenSecret = typeof getJwtSecret === 'function' ? getJwtSecret() : JWT_SECRET;
+    const token = jwt.sign(tokenPayload, tokenSecret, {
+      expiresIn: JWT_EXPIRES_IN
+    });
+
+    return res.status(200).json({
+      token,
+      session_id: session.sessionId,
+      user: {
+        id: user.id,
+        email: user.email
+      }
+    });
+  } catch (error) {
+    console.error('Login error:', error);
+    return sendError(res, 500, 'internal_error', 'An unexpected error occurred during login');
+  }
+});
+
+/**
+ * POST /api/v1/auth/logout
+ */
+router.post('/logout', authenticateToken, async (req, res) => {
+  try {
+    const sessionId = req.user && req.user.session_id;
+    const userId = req.user && req.user.id;
+
+    if (sessionId) {
+      const sessionFingerprint = req.session?.device_fingerprint || null;
+      const rawFingerprint = req.headers['x-device-fingerprint'];
+      const validHeaderFingerprint = validateDeviceFingerprint(rawFingerprint) ? rawFingerprint.trim() : null;
+      const deviceFingerprint = sessionFingerprint || validHeaderFingerprint;
+
+      await invalidateSession(sessionId);
+
+      await recordSecurityEvent({
+        userId,
+        sessionId,
+        eventType: 'session_terminated',
+        context: extractRequestContext(req, deviceFingerprint)
+      });
+    }
+
+    return res.status(200).json({
+      message: 'Successfully logged out'
+    });
+  } catch (error) {
+    console.error('Logout error:', error);
+    return sendError(res, 500, 'internal_error', 'An unexpected error occurred during logout');
+  }
+});
+
+module.exports = router;

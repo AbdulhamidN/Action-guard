@@ -1,0 +1,118 @@
+{
+  "schema_version": "1.0.0",
+  "policy_id": "candidate-strict-v1",
+  "description": "Candidate Strict Policy for Comparison Testing (Strict Impossible Travel)",
+  "DECISION_ORDER": [
+    "allow",
+    "monitor",
+    "reverify",
+    "delay",
+    "block"
+  ],
+  "DEFAULT_ACTION_SENSITIVITY": {
+    "login_success": "low",
+    "login_failure": "low",
+    "login_failed": "low",
+    "new_device": "low",
+    "phone_number_change": "medium",
+    "recovery_email_change": "high",
+    "mfa_change": "high",
+    "password_change": "high",
+    "password_reset": "high",
+    "password_reset_request": "high",
+    "high_impact_action": "critical",
+    "session_created": "low",
+    "session_terminated": "low",
+    "session_revoked": "low",
+    "verification_success": "low",
+    "verification_failed": "low",
+    "mfa_prompt": "low",
+    "mfa_success": "low",
+    "mfa_failure": "low",
+    "suspicious_activity_detected": "low",
+    "access_blocked": "low"
+  },
+  "BASE_MATRIX": {
+    "low": {
+      "low": "allow",
+      "medium": "allow",
+      "high": "monitor",
+      "critical": "monitor"
+    },
+    "medium": {
+      "low": "allow",
+      "medium": "reverify",
+      "high": "reverify",
+      "critical": "reverify"
+    },
+    "high": {
+      "low": "monitor",
+      "medium": "reverify",
+      "high": "delay",
+      "critical": "block"
+    },
+    "critical": {
+      "low": "reverify",
+      "medium": "delay",
+      "high": "block",
+      "critical": "block"
+    }
+  },
+  "ESCALATION_RULES": [
+    {
+      "id": "esc_impossible_travel",
+      "min_decision": "reverify",
+      "description": "impossible_travel present -> min reverify (strict candidate)"
+    },
+    {
+      "id": "esc_impossible_travel_sensitive",
+      "min_decision": "reverify",
+      "description": "impossible_travel and sensitivity >= medium -> min reverify"
+    },
+    {
+      "id": "esc_travel_and_novelty",
+      "min_decision": "delay",
+      "description": "impossible_travel and (unrecognized_device or unrecognized_country) and sensitivity >= high -> min delay"
+    },
+    {
+      "id": "esc_credential_cascade",
+      "min_decision": "reverify",
+      "description": "seq_rapid_credential_cascade matched and action in account-modification types -> min reverify"
+    },
+    {
+      "id": "esc_takeover_progression",
+      "min_decision": "block",
+      "description": "seq_takeover_progression matched and sensitivity >= high -> min block"
+    },
+    {
+      "id": "esc_automation",
+      "min_decision": "reverify",
+      "description": "automation_timing_burst present and sensitivity >= medium -> min reverify"
+    },
+    {
+      "id": "esc_double_novelty",
+      "min_decision": "reverify",
+      "description": "unrecognized_device and unrecognized_country and sensitivity >= medium -> min reverify"
+    }
+  ],
+  "FAIL_SAFE_BY_SENSITIVITY": {
+    "low": "monitor",
+    "medium": "monitor",
+    "high": "block",
+    "critical": "block"
+  },
+  "ENFORCEMENT_MODE_BY_DECISION": {
+    "allow": "automatic",
+    "monitor": "automatic",
+    "reverify": "automatic",
+    "delay": "automatic",
+    "block": "automatic"
+  },
+  "RECOMMENDED_ACTIONS": {
+    "allow": ["proceed"],
+    "monitor": ["log_telemetry"],
+    "reverify": ["require_step_up"],
+    "delay": ["delay_with_cancel", "notify_user"],
+    "block": ["block_action", "notify_user"]
+  }
+}

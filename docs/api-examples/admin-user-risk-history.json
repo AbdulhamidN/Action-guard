@@ -1,0 +1,57 @@
+[
+  {
+    "event_id": "evt_fixture_04_pwd_change",
+    "user_id": "usr_fixture_admin_demo_01",
+    "session_id": "sess_fixture_contained_02",
+    "risk_score": 88,
+    "risk_tier": "critical",
+    "contributing_signals": [
+      {
+        "signal": "seq_rapid_credential_cascade",
+        "category": "sequence",
+        "weight": 35
+      },
+      {
+        "signal": "unrecognized_device",
+        "category": "device",
+        "weight": 25
+      },
+      {
+        "signal": "impossible_travel",
+        "category": "location",
+        "weight": 28
+      }
+    ],
+    "evaluated_at": "2026-10-18T06:32:29.773Z",
+    "explanation": {
+      "user_facing": "Critical security anomaly detected. Action blocked and session contained to safeguard your account.",
+      "admin_facing": "Rapid credential modification sequence from unrecognized hardware fingerprint combined with impossible travel (velocity > 1200 km/h)."
+    },
+    "id": "ra_fixture_02_critical"
+  },
+  {
+    "event_id": "evt_fixture_01_login",
+    "user_id": "usr_fixture_admin_demo_01",
+    "session_id": "sess_fixture_active_01",
+    "risk_score": 15,
+    "risk_tier": "low",
+    "contributing_signals": [
+      {
+        "signal": "known_device",
+        "category": "device",
+        "weight": -10
+      },
+      {
+        "signal": "normal_travel",
+        "category": "location",
+        "weight": 0
+      }
+    ],
+    "evaluated_at": "2026-10-18T06:07:29.773Z",
+    "explanation": {
+      "user_facing": "Login from recognized corporate device in regular location.",
+      "admin_facing": "Device fingerprint matched baseline. Location consistent with historical baseline."
+    },
+    "id": "ra_fixture_01_low"
+  }
+]
