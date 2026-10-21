@@ -20,10 +20,28 @@ const {
   STEP_UP_USER_MAX
 } = require('../config/sessionConfig');
 const { executeCheckStepUpChallengeLimits } = require('../storage/redis');
+const mailService = require('./mailService');
 
 let ephemeralDevTestKeyPair = null;
 const testChallengeOutbox = new Map();
-const OTP_SALT_SECRET = crypto.randomBytes(32);
+
+function resolveOtpSaltSecret() {
+  const configuredSecret = process.env.STEP_UP_OTP_SECRET || process.env.JWT_SECRET;
+
+  if (configuredSecret && String(configuredSecret).trim().length > 0) {
+    return crypto.createHash('sha256').update(String(configuredSecret)).digest();
+  }
+
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error(
+      'STEP_UP_OTP_SECRET or JWT_SECRET must be configured to keep step-up OTP verification stable across restarts.'
+    );
+  }
+
+  return crypto.createHash('sha256').update('actionguard-dev-step-up-secret').digest();
+}
+
+const OTP_SALT_SECRET = resolveOtpSaltSecret();
 
 const VERIFY_STEP_UP_CHALLENGE_LUA = `
 -- ATOMIC_VERIFY_STEP_UP_CHALLENGE
@@ -449,6 +467,18 @@ async function issueStepUpChallenge({ userId, sessionId, scope, now = new Date()
         }
       }
     }
+  } else {
+    try {
+      await mailService.sendStepUpCode(user.email, otp, STEP_UP_CHALLENGE_TTL_SECONDS);
+    } catch (mailErr) {
+      try {
+        await client.del(challengeKey);
+      } catch (_) { /* best effort */ }
+      console.error('[StepUp] OTP email delivery failed:', mailErr.message);
+      const err = new Error('Verification code could not be delivered');
+      err.code = 'STEP_UP_DELIVERY_FAILED';
+      throw err;
+    }
   }
 
   return {
@@ -639,7 +669,6 @@ async function verifyStepUpChallenge({
     throw err;
   }
 
-  // Defense-in-depth constant-time verification in Node.js
   const candidateHash = String(candidateHashesByScope[challengeScope] || '');
   const expectedBuf = Buffer.from(expectedHash, 'hex');
   const candidateBuf = Buffer.from(candidateHash, 'hex');
@@ -660,7 +689,6 @@ async function verifyStepUpChallenge({
 
   const challenge = { scope: challengeScope };
 
-  // Record verification_success BEFORE granting so the session risk assessment reflects the discount
   await recordSecurityEvent({
     userId,
     sessionId,
@@ -674,7 +702,6 @@ async function verifyStepUpChallenge({
     }
   });
 
-  // Mint short-lived ES256 verification ticket and redeem server-side
   const nowSec = Math.floor(nowMs / 1000);
   const jti = `tkt_${crypto.randomUUID()}`;
   const ticketString = jwt.sign(
@@ -712,13 +739,6 @@ async function verifyStepUpChallenge({
   };
 }
 
-/**
- * Test-only helper to retrieve the OTP generated for a challengeId.
- * Strictly throws if called outside NODE_ENV === 'test'.
- *
- * @param {string} challengeId
- * @returns {string|null}
- */
 function getTestChallengeOtp(challengeId) {
   if (process.env.NODE_ENV !== 'test') {
     throw new Error('getTestChallengeOtp is strictly restricted to NODE_ENV === "test"');
@@ -727,13 +747,6 @@ function getTestChallengeOtp(challengeId) {
   return entry ? entry.otp : null;
 }
 
-/**
- * Test-only helper to inspect full challenge delivery metadata (destination email, scope, etc.).
- * Strictly throws if called outside NODE_ENV === 'test'.
- *
- * @param {string} challengeId
- * @returns {object|null}
- */
 function getTestChallengeRecord(challengeId) {
   if (process.env.NODE_ENV !== 'test') {
     throw new Error('getTestChallengeRecord is strictly restricted to NODE_ENV === "test"');
@@ -741,13 +754,6 @@ function getTestChallengeRecord(challengeId) {
   return testChallengeOutbox.get(challengeId) || null;
 }
 
-/**
- * Demo and development helper to retrieve a challenge record when ACTIONGUARD_DEMO_MODE is true.
- * Strictly forbidden in production environments.
- *
- * @param {string} challengeId
- * @returns {object|null}
- */
 function getDemoChallengeRecord(challengeId) {
   if (process.env.NODE_ENV === 'production') {
     throw new Error('getDemoChallengeRecord cannot be called in production environments');
