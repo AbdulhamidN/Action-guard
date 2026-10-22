@@ -193,8 +193,10 @@ function resolveLocalStepUpKeys() {
     let privKeyObj;
     let pubKeyObj;
     try {
-      privKeyObj = crypto.createPrivateKey(rawPriv);
-      pubKeyObj = crypto.createPublicKey(rawPub);
+      const normalizedPriv = String(rawPriv).replace(/\\n/g, '\n').trim();
+      const normalizedPub = String(rawPub).replace(/\\n/g, '\n').trim();
+      privKeyObj = crypto.createPrivateKey(normalizedPriv);
+      pubKeyObj = crypto.createPublicKey(normalizedPub);
     } catch {
       return {
         ok: false,
@@ -442,7 +444,8 @@ async function issueStepUpChallenge({ userId, sessionId, scope, now = new Date()
     throw new Error('ACTIONGUARD_DEMO_MODE cannot be enabled in production environments');
   }
 
-  if (isTest || isDemoMode) {
+  const isDev = process.env.NODE_ENV === 'development';
+  if (isTest || isDemoMode || isDev) {
     pruneTestChallengeOutbox(nowMs);
     testChallengeOutbox.set(challengeId, {
       otp,
@@ -467,18 +470,19 @@ async function issueStepUpChallenge({ userId, sessionId, scope, now = new Date()
         }
       }
     }
-  } else {
+  }
+
+  try {
+    await mailService.sendStepUpCode(user.email, otp, STEP_UP_CHALLENGE_TTL_SECONDS);
+  } catch (mailErr) {
     try {
-      await mailService.sendStepUpCode(user.email, otp, STEP_UP_CHALLENGE_TTL_SECONDS);
-    } catch (mailErr) {
-      try {
-        await client.del(challengeKey);
-      } catch (_) { /* best effort */ }
-      console.error('[StepUp] OTP email delivery failed:', mailErr.message);
-      const err = new Error('Verification code could not be delivered');
-      err.code = 'STEP_UP_DELIVERY_FAILED';
-      throw err;
-    }
+      await client.del(challengeKey);
+    } catch (_) { /* best effort */ }
+    testChallengeOutbox.delete(challengeId);
+    console.error('[StepUp] OTP email delivery failed:', mailErr.message);
+    const err = new Error('Verification code could not be delivered');
+    err.code = 'STEP_UP_DELIVERY_FAILED';
+    throw err;
   }
 
   return {
@@ -740,16 +744,22 @@ async function verifyStepUpChallenge({
 }
 
 function getTestChallengeOtp(challengeId) {
-  if (process.env.NODE_ENV !== 'test') {
-    throw new Error('getTestChallengeOtp is strictly restricted to NODE_ENV === "test"');
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('getTestChallengeOtp cannot be called in production environments');
+  }
+  if (process.env.NODE_ENV !== 'test' && process.env.NODE_ENV !== 'development') {
+    throw new Error('getTestChallengeOtp is strictly restricted to test and development environments');
   }
   const entry = testChallengeOutbox.get(challengeId);
   return entry ? entry.otp : null;
 }
 
 function getTestChallengeRecord(challengeId) {
-  if (process.env.NODE_ENV !== 'test') {
-    throw new Error('getTestChallengeRecord is strictly restricted to NODE_ENV === "test"');
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('getTestChallengeRecord cannot be called in production environments');
+  }
+  if (process.env.NODE_ENV !== 'test' && process.env.NODE_ENV !== 'development') {
+    throw new Error('getTestChallengeRecord is strictly restricted to test and development environments');
   }
   return testChallengeOutbox.get(challengeId) || null;
 }
