@@ -3,6 +3,13 @@ const { Sequelize } = require('sequelize');
 const isDocker = process.env.DB_HOST === 'mysql';
 const defaultPort = isDocker ? 3306 : 3307;
 
+const dialectOptions = (process.env.DB_SSL === 'true' || process.env.DB_PORT === '4000') ? {
+  ssl: {
+    minVersion: 'TLSv1.2',
+    rejectUnauthorized: false
+  }
+} : {};
+
 const sequelize = new Sequelize(
   process.env.DB_NAME || 'actionguard',
   process.env.DB_USER || 'actionguard',
@@ -11,6 +18,7 @@ const sequelize = new Sequelize(
     host: process.env.DB_HOST || 'localhost',
     port: parseInt(process.env.DB_PORT || defaultPort, 10),
     dialect: 'mysql',
+    dialectOptions,
     logging: process.env.DB_LOGGING === 'true' ? console.log : false,
     pool: {
       max: 10,
