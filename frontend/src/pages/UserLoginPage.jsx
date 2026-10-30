@@ -5,6 +5,7 @@ import { setUserToken } from '../services/authStorage.js';
 import { getDeviceFingerprint } from '../services/fingerprint.js';
 import { ErrorBanner } from '../components/common/ErrorBanner.jsx';
 import { Spinner } from '../components/common/Spinner.jsx';
+import { AmbientBackground } from '../components/common/AmbientBackground.jsx';
 import { DECISION_ORDER, TIER_META } from '../components/landing/tiers.js';
 
 /**
@@ -59,47 +60,44 @@ export function UserLoginPage() {
   };
 
   const inputClass =
-    'block w-full rounded-lg bg-space-800 border border-white/10 px-3 py-2.5 text-sm text-ink-100 placeholder-ink-500 focus:outline-none focus:border-neon-cyan focus:ring-1 focus:ring-neon-cyan disabled:opacity-60';
-  const labelClass = 'block text-xs font-semibold uppercase tracking-wider text-ink-300 mb-1';
+    'block w-full rounded-xl bg-space-900 border border-white/15 px-4 py-2.5 text-sm text-white placeholder-ink-500 focus:outline-none focus:border-brand-cyan focus:ring-1 focus:ring-brand-cyan disabled:opacity-60 transition-all font-mono';
+  const labelClass = 'block text-xs font-semibold uppercase tracking-wider text-ink-300 mb-1.5 font-mono';
 
   return (
-    <div className="min-h-screen bg-space-900 text-ink-100 relative overflow-hidden flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8">
-      <div className="pointer-events-none absolute -top-24 left-1/3 h-80 w-80 rounded-full bg-neon-indigo/20 blur-[120px] animate-ag-glow" aria-hidden="true" />
-      <svg className="pointer-events-none absolute right-[-60px] bottom-[-60px] h-96 w-96 opacity-[0.07]" viewBox="0 0 200 200" aria-hidden="true" focusable="false">
-        <path d="M100 10 L160 34 V96 C160 136 132 160 100 176 C68 160 40 136 40 96 V34 Z" fill="none" stroke="#06B6D4" strokeWidth="6" />
-      </svg>
+    <div className="min-h-screen bg-space-950 text-ink-100 relative overflow-hidden flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8">
+      <AmbientBackground variant="subtle" />
 
-      <div className="relative w-full max-w-4xl grid md:grid-cols-2 rounded-2xl overflow-hidden border border-white/10 bg-white/[0.04] backdrop-blur-md shadow-[0_0_60px_-15px_rgba(99,102,241,0.35)]">
-        <aside className="hidden md:flex flex-col justify-between p-8 bg-space-800/60 border-r border-white/10">
+      <div className="relative w-full max-w-4xl grid md:grid-cols-2 rounded-2xl overflow-hidden border border-white/10 bg-space-850/90 backdrop-blur-xl shadow-2xl ring-1 ring-white/5">
+        <aside className="hidden md:flex flex-col justify-between p-8 bg-space-900/70 border-r border-white/10">
           <div>
-            <div className="h-10 w-10 rounded-xl bg-neon-indigo flex items-center justify-center font-bold" aria-hidden="true">AG</div>
-            <h2 className="mt-6 text-2xl font-extrabold tracking-tight">Never trust a session. Verify every action.</h2>
-            <p className="mt-3 text-sm text-ink-300">
-              ActionGuard re-evaluates sensitive actions against current context and responds in proportion to the risk.
+            <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-brand-luminous to-brand-blue flex items-center justify-center font-bold text-white shadow-md shadow-brand-luminous/30" aria-hidden="true">AG</div>
+            <h2 className="mt-6 text-2xl font-extrabold tracking-tight text-white">Never trust a session. Verify every action.</h2>
+            <p className="mt-3 text-sm text-ink-300 leading-relaxed">
+              ActionGuard re-evaluates sensitive actions against current context and responds in proportion to evaluated risk.
             </p>
           </div>
-          <ol className="mt-8 space-y-2" aria-label="Response tiers from least to most friction">
+          <ol className="mt-8 space-y-2.5" aria-label="Response tiers from least to most friction">
             {DECISION_ORDER.map((id, i) => (
-              <li key={id} className="flex items-center gap-3 text-sm">
-                <span className="h-2.5 rounded-full" style={{ width: `${(i + 1) * 20}%`, background: TIER_META[id].color }} aria-hidden="true" />
+              <li key={id} className="flex items-center gap-3 text-xs font-mono font-bold">
+                <span className="h-2 rounded-full" style={{ width: `${(i + 1) * 20}%`, background: TIER_META[id].color }} aria-hidden="true" />
                 <span style={{ color: TIER_META[id].color }}>{id}</span>
               </li>
             ))}
           </ol>
         </aside>
 
-        <div className="p-8 space-y-6">
+        <div className="p-8 sm:p-10 space-y-6">
           <div>
-            <h2 className="text-2xl font-extrabold tracking-tight" data-testid="page-title">
+            <h2 className="text-2xl font-extrabold tracking-tight text-white" data-testid="page-title">
               User Login
             </h2>
-            <p className="mt-1 text-sm text-ink-300">
+            <p className="mt-1 text-sm text-ink-400">
               ActionGuard Zero Trust User Session Authentication
             </p>
           </div>
 
           {justRegistered && !error && (
-            <div className="rounded-lg bg-state-ok/10 border border-state-ok/40 p-3 text-sm text-state-ok" data-testid="registered-notice">
+            <div className="rounded-xl bg-emerald-500/10 border border-emerald-500/40 p-3 text-sm text-emerald-400" data-testid="registered-notice">
               Account created. Please sign in.
             </div>
           )}
@@ -154,27 +152,31 @@ export function UserLoginPage() {
             <button
               type="submit"
               disabled={loading}
-              className="w-full flex justify-center py-2.5 px-4 text-sm font-semibold rounded-lg text-white bg-gradient-to-r from-neon-indigo to-neon-cyan hover:brightness-110 transition disabled:opacity-50"
+              className="w-full flex justify-center py-3 px-4 text-sm font-bold rounded-xl text-white bg-gradient-to-r from-brand-blue via-brand-luminous to-brand-cyan hover:brightness-110 transition-all shadow-lg shadow-brand-luminous/30 disabled:opacity-50 hover:scale-[1.01]"
             >
               {loading ? <Spinner size="sm" label="Authenticating..." /> : 'Sign In'}
             </button>
           </form>
 
           <p className="text-xs text-ink-500">
-            We verify your device and session, not just your password.
+            We verify your device and session context, not just your password.
           </p>
 
-          <p className="text-sm text-ink-300">
-            Access is provisioned by your organization.{' '}
-            <Link to="/signup" className="font-medium text-neon-cyan hover:underline underline-offset-4" data-testid="signup-link">
-              Need an account?
-            </Link>
-          </p>
-          <p className="text-sm">
-            <Link to="/" className="text-ink-500 hover:text-ink-300">&larr; Back to overview</Link>
-          </p>
+          <div className="pt-2 border-t border-white/5 space-y-2 text-sm">
+            <p className="text-ink-300">
+              Access is provisioned by your organization.{' '}
+              <Link to="/signup" className="font-semibold text-brand-cyan hover:underline underline-offset-4" data-testid="signup-link">
+                Need an account?
+              </Link>
+            </p>
+            <p>
+              <Link to="/" className="text-ink-400 hover:text-white transition-colors">&larr; Back to overview</Link>
+            </p>
+          </div>
         </div>
       </div>
     </div>
   );
 }
+
+export default UserLoginPage;

@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { DECISION_ORDER, TIER_META } from './tiers.js';
+import { VisualSecurityFlow } from './VisualSecurityFlow.jsx';
 
 // Client-side mirror of the server Policy Decision Point for education;
 // the server remains authoritative. Weights and thresholds are illustrative.
@@ -157,8 +158,8 @@ export function evaluateScenario(inputs) {
 
 const GAUGE_COLOR = { low: '#10B981', medium: '#F59E0B', high: '#F97316', critical: '#EF4444' };
 
-const checkboxClass = 'h-4 w-4 accent-cyan-500';
-const selectClass = 'mt-1 w-full rounded-lg bg-space-800 border border-white/10 px-3 py-2 text-sm text-ink-100 focus:border-neon-cyan';
+const checkboxClass = 'h-4 w-4 rounded border-white/20 bg-space-800 text-brand-cyan focus:ring-brand-cyan focus:ring-offset-space-900 cursor-pointer accent-[#35C5E8]';
+const selectClass = 'mt-1.5 w-full rounded-xl bg-space-850/80 border border-white/10 px-3.5 py-2 text-sm text-ink-100 focus:border-brand-cyan focus:ring-1 focus:ring-brand-cyan transition-colors';
 
 export function PolicyInspector() {
   const [inputs, setInputs] = useState(DEFAULT_INPUTS);
@@ -174,17 +175,28 @@ export function PolicyInspector() {
   };
 
   return (
-    <div className="grid lg:grid-cols-5 gap-6" data-testid="policy-inspector">
-      <div className="lg:col-span-2 rounded-2xl border border-white/10 bg-white/[0.04] backdrop-blur-md p-5 space-y-4">
-        <div>
-          <p className="text-xs uppercase tracking-widest text-ink-300">Presets</p>
-          <div className="mt-2 flex flex-wrap gap-2">
+    <div className="space-y-8" data-testid="policy-inspector">
+      {/* 1. PRIMARY VISUAL STORYTELLING: Central 5-Stage Animated Security Pipeline */}
+      <VisualSecurityFlow inputs={inputs} result={result} />
+
+      {/* 2. COMPACT INTERACTIVE SIMULATOR COCKPIT & CONTROLS */}
+      <div className="rounded-3xl border border-white/10 bg-space-900/60 backdrop-blur-xl p-6 sm:p-8 space-y-6">
+        
+        {/* Presets Quick Selector */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-5 border-b border-white/10">
+          <div>
+            <h3 className="text-sm font-bold text-white uppercase tracking-wider font-mono">
+              Simulate Real Attack &amp; Activity Scenarios
+            </h3>
+            <p className="text-xs text-ink-300 mt-0.5">Click any preset to see the 5-stage pipeline react in real time.</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
             {PRESETS.map((p) => (
               <button
                 key={p.id}
                 type="button"
                 onClick={() => setInputs(p.inputs)}
-                className="text-xs px-3 py-1.5 rounded-full border border-white/15 hover:border-neon-cyan hover:text-white text-ink-300"
+                className="text-xs px-3 py-1.5 rounded-full border border-white/15 hover:border-brand-cyan hover:text-white text-ink-300 bg-white/[0.03] hover:bg-white/[0.08] transition-all"
                 data-testid={`preset-${p.id}`}
               >
                 {p.label}
@@ -193,122 +205,209 @@ export function PolicyInspector() {
           </div>
         </div>
 
-        <label className="block text-sm">
-          Action
-          <select value={inputs.action} onChange={(e) => onActionChange(e.target.value)} className={selectClass} data-testid="input-action">
-            {ACTIONS.map((a) => <option key={a.id} value={a.id}>{a.label}</option>)}
-          </select>
-        </label>
+        {/* 3-Column Compact Control Deck */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          
+          {/* Column A: Action & Sensitivity */}
+          <div className="rounded-2xl border border-white/5 bg-space-850/50 p-4 space-y-4">
+            <h4 className="text-xs font-bold font-mono uppercase tracking-wider text-brand-cyan">Action &amp; Target</h4>
+            
+            <label className="block text-xs font-medium text-ink-200">
+              Requested Action
+              <select value={inputs.action} onChange={(e) => onActionChange(e.target.value)} className={selectClass} data-testid="input-action">
+                {ACTIONS.map((a) => <option key={a.id} value={a.id}>{a.label}</option>)}
+              </select>
+            </label>
 
-        <label className="block text-sm">
-          Action sensitivity (can only be raised)
-          <select value={inputs.sensitivityOverride} onChange={(e) => set({ sensitivityOverride: e.target.value })} className={selectClass} data-testid="input-sensitivity">
-            {SENSITIVITY_ORDER.map((s) => (
-              <option key={s} value={s} disabled={rank(SENSITIVITY_ORDER, s) < rank(SENSITIVITY_ORDER, defaultSensitivity)}>{s}</option>
-            ))}
-          </select>
-        </label>
-
-        <fieldset className="space-y-2 text-sm">
-          <legend className="text-xs uppercase tracking-widest text-ink-300 mb-1">Signals</legend>
-          <label className="flex items-center justify-between gap-3"><span>New device</span><input type="checkbox" className={checkboxClass} checked={inputs.newDevice} onChange={(e) => set({ newDevice: e.target.checked })} data-testid="input-new-device" /></label>
-          <label className="flex items-center justify-between gap-3"><span>New country</span><input type="checkbox" className={checkboxClass} checked={inputs.newCountry} onChange={(e) => set({ newCountry: e.target.checked })} data-testid="input-new-country" /></label>
-          <label className="flex items-center justify-between gap-3"><span>Impossible travel</span><input type="checkbox" className={checkboxClass} checked={inputs.impossibleTravel} onChange={(e) => set({ impossibleTravel: e.target.checked })} data-testid="input-travel" /></label>
-          <label className="flex items-center justify-between gap-3"><span>Deviates from personal baseline</span><input type="checkbox" className={checkboxClass} checked={inputs.baselineDeviation} onChange={(e) => set({ baselineDeviation: e.target.checked })} data-testid="input-baseline" /></label>
-        </fieldset>
-
-        <label className="block text-sm">
-          Timing
-          <select value={inputs.timing} onChange={(e) => set({ timing: e.target.value })} className={selectClass} data-testid="input-timing">
-            <option value="normal">Normal</option>
-            <option value="unusual_hour">Unusual hour</option>
-            <option value="automation_burst">Automation burst</option>
-          </select>
-        </label>
-
-        <label className="block text-sm">
-          Sequence
-          <select value={inputs.sequence} onChange={(e) => set({ sequence: e.target.value })} className={selectClass} data-testid="input-sequence">
-            <option value="none">None</option>
-            <option value="credential_cascade">Rapid credential cascade</option>
-            <option value="takeover_progression">Takeover progression</option>
-          </select>
-        </label>
-
-        <label className="block text-sm">
-          Verification confidence: {inputs.confidence}%
-          <input type="range" min="0" max="100" value={inputs.confidence} onChange={(e) => set({ confidence: Number(e.target.value) })} className="mt-2 w-full accent-cyan-500" data-testid="input-confidence" />
-        </label>
-      </div>
-
-      <div className="lg:col-span-3 rounded-2xl border border-white/10 bg-white/[0.04] backdrop-blur-md p-5" aria-live="polite" data-testid="inspector-result">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <p className="text-xs uppercase tracking-widest text-ink-300">Decision</p>
-            <p
-              key={result.decision}
-              className="mt-1 inline-block px-4 py-1.5 rounded-full border text-lg font-extrabold animate-ag-rise"
-              style={{ color: tierMeta.color, borderColor: tierMeta.color, background: `${tierMeta.color}1A` }}
-              data-testid="inspector-decision"
-            >
-              {tierMeta.label}
-            </p>
-          </div>
-          <div className="text-right text-sm">
-            <p className="text-ink-300">Risk tier</p>
-            <p className="font-semibold capitalize" data-testid="inspector-risk-tier">{result.riskTier}</p>
-          </div>
-        </div>
-
-        <div className="mt-5">
-          <div className="flex justify-between text-xs text-ink-300">
-            <span>Risk score (illustrative)</span>
-            <span data-testid="inspector-score">{result.score} / 100</span>
-          </div>
-          <div className="mt-1 h-3 rounded-full bg-space-800 overflow-hidden" role="img" aria-label={`Risk score ${result.score} out of 100, ${result.riskTier} tier`}>
-            <div className="h-full rounded-full transition-all duration-500" style={{ width: `${result.score}%`, background: GAUGE_COLOR[result.riskTier] }} />
-          </div>
-        </div>
-
-        <p className="mt-5 rounded-lg bg-space-900/70 border border-white/10 p-3 font-mono text-xs text-ink-300">
-          Score = <b className="text-neon-cyan">{terms.base}</b> base + <b className="text-neon-cyan">{terms.context}</b> context + <b className="text-neon-cyan">{terms.sequence}</b> sequence + <b className="text-neon-cyan">{terms.timing}</b> timing + <b className="text-neon-cyan">{terms.baseline}</b> baseline &minus; <b className="text-neon-cyan">{terms.confidence}</b> confidence
-        </p>
-
-        <div className="mt-5">
-          <p className="text-xs uppercase tracking-widest text-ink-300">What the user would see</p>
-          <p className="mt-1 text-sm text-ink-100" data-testid="inspector-explanation">{result.userFacing}</p>
-        </div>
-
-        <div className="mt-5">
-          <p className="text-xs uppercase tracking-widest text-ink-300">Contributing signals</p>
-          <ul className="mt-2 space-y-1 text-sm" data-testid="inspector-signals">
-            {result.signals.map((s) => (
-              <li key={s.label} className="flex justify-between gap-3">
-                <span className="text-ink-100">{s.label} <span className="text-xs text-ink-500">({s.category})</span></span>
-                <span className={s.weight < 0 ? 'text-state-ok' : 'text-ink-300'}>{s.weight > 0 ? `+${s.weight}` : s.weight}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-
-        <details className="mt-5 text-sm">
-          <summary className="cursor-pointer text-neon-cyan">Why this decision?</summary>
-          <div className="mt-2 space-y-2 text-ink-300">
-            <p>Base matrix ({result.sensitivity} sensitivity, {result.riskTier} risk): <b style={{ color: TIER_META[result.baseDecision].color }}>{result.baseDecision}</b></p>
-            {result.fired.length === 0 ? (
-              <p>No escalation rules fired.</p>
-            ) : (
-              <ul className="space-y-1" data-testid="inspector-rules">
-                {result.fired.map((r) => (
-                  <li key={r.id}><code className="text-xs text-neon-indigo">{r.id}</code> &rarr; min {r.decision}. {r.description}</li>
+            <label className="block text-xs font-medium text-ink-200">
+              Sensitivity Override <span className="text-[11px] text-ink-400 font-normal">(can only raise)</span>
+              <select value={inputs.sensitivityOverride} onChange={(e) => set({ sensitivityOverride: e.target.value })} className={selectClass} data-testid="input-sensitivity">
+                {SENSITIVITY_ORDER.map((s) => (
+                  <option key={s} value={s} disabled={rank(SENSITIVITY_ORDER, s) < rank(SENSITIVITY_ORDER, defaultSensitivity)}>{s}</option>
                 ))}
-              </ul>
-            )}
-            <p>Final decision is the strictest of the base decision and every fired rule. Rules can only raise it.</p>
-          </div>
-        </details>
+              </select>
+            </label>
 
-        <p className="mt-5 text-xs text-ink-500">Educational client-side mirror of the server Policy Decision Point. Weights and thresholds are illustrative; the server remains authoritative.</p>
+            <label className="block text-xs font-medium text-ink-200">
+              Verification confidence: <span className="text-brand-cyan font-bold font-mono">{inputs.confidence}%</span>
+              <input
+                type="range"
+                min="0"
+                max="100"
+                value={inputs.confidence}
+                onChange={(e) => set({ confidence: Number(e.target.value) })}
+                className="mt-2 w-full accent-[#35C5E8] cursor-pointer"
+                data-testid="input-confidence"
+              />
+            </label>
+          </div>
+
+          {/* Column B: Session Signals */}
+          <div className="rounded-2xl border border-white/5 bg-space-850/50 p-4 space-y-4">
+            <h4 className="text-xs font-bold font-mono uppercase tracking-wider text-brand-cyan">Session Signals</h4>
+            
+            <div className="space-y-3 pt-1">
+              <label className="flex items-center justify-between text-xs text-ink-200 cursor-pointer p-1.5 rounded-lg hover:bg-white/5 transition-colors">
+                <span>Unrecognized Device (+25)</span>
+                <input type="checkbox" className={checkboxClass} checked={inputs.newDevice} onChange={(e) => set({ newDevice: e.target.checked })} data-testid="input-new-device" />
+              </label>
+
+              <label className="flex items-center justify-between text-xs text-ink-200 cursor-pointer p-1.5 rounded-lg hover:bg-white/5 transition-colors">
+                <span>Unrecognized Country (+25)</span>
+                <input type="checkbox" className={checkboxClass} checked={inputs.newCountry} onChange={(e) => set({ newCountry: e.target.checked })} data-testid="input-new-country" />
+              </label>
+
+              <label className="flex items-center justify-between text-xs text-ink-200 cursor-pointer p-1.5 rounded-lg hover:bg-white/5 transition-colors">
+                <span>Impossible Travel Velocity (+28)</span>
+                <input type="checkbox" className={checkboxClass} checked={inputs.impossibleTravel} onChange={(e) => set({ impossibleTravel: e.target.checked })} data-testid="input-travel" />
+              </label>
+
+              <label className="flex items-center justify-between text-xs text-ink-200 cursor-pointer p-1.5 rounded-lg hover:bg-white/5 transition-colors">
+                <span>Deviates from User Baseline (+13)</span>
+                <input type="checkbox" className={checkboxClass} checked={inputs.baselineDeviation} onChange={(e) => set({ baselineDeviation: e.target.checked })} data-testid="input-baseline" />
+              </label>
+            </div>
+          </div>
+
+          {/* Column C: Timing & Sequence */}
+          <div className="rounded-2xl border border-white/5 bg-space-850/50 p-4 space-y-4">
+            <h4 className="text-xs font-bold font-mono uppercase tracking-wider text-brand-cyan">Timing &amp; Sequence</h4>
+            
+            <label className="block text-xs font-medium text-ink-200">
+              Timing Anomaly Heuristics
+              <select value={inputs.timing} onChange={(e) => set({ timing: e.target.value })} className={selectClass} data-testid="input-timing">
+                <option value="normal">Normal (Typical user cadence)</option>
+                <option value="unusual_hour">Unusual hour (+10)</option>
+                <option value="automation_burst">Automation timing burst (+20)</option>
+              </select>
+            </label>
+
+            <label className="block text-xs font-medium text-ink-200">
+              Sequence Correlation
+              <select value={inputs.sequence} onChange={(e) => set({ sequence: e.target.value })} className={selectClass} data-testid="input-sequence">
+                <option value="none">None (Isolated action)</option>
+                <option value="credential_cascade">Rapid credential cascade (+35)</option>
+                <option value="takeover_progression">Takeover progression (+50)</option>
+              </select>
+            </label>
+          </div>
+
+        </div>
+
+        {/* 3. EXPANDABLE TECHNICAL DETAILS & AUDIT BREAKDOWN */}
+        <div className="pt-4 border-t border-white/10" aria-live="polite" data-testid="inspector-result">
+          
+          {/* Summary Verdict Bar */}
+          <div className="flex flex-wrap items-center justify-between gap-4 p-4 rounded-2xl bg-space-850/60 border border-white/10">
+            <div className="flex items-center gap-4">
+              <div>
+                <span className="text-[10px] font-mono uppercase tracking-widest text-ink-400">Final Decision</span>
+                <div className="flex items-center gap-2 mt-0.5">
+                  <span
+                    key={result.decision}
+                    className="px-3.5 py-1 rounded-full text-base font-extrabold uppercase tracking-wide border shadow-sm"
+                    style={{ color: tierMeta.color, borderColor: tierMeta.color, background: `${tierMeta.color}18` }}
+                    data-testid="inspector-decision"
+                  >
+                    {tierMeta.label}
+                  </span>
+                  <span className="text-xs font-mono text-ink-400 capitalize" data-testid="inspector-risk-tier">
+                    ({result.riskTier} risk tier)
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div className="text-right">
+              <span className="text-[10px] font-mono uppercase tracking-widest text-ink-400">Computed Score</span>
+              <div className="text-xl font-extrabold font-mono" style={{ color: GAUGE_COLOR[result.riskTier] }} data-testid="inspector-score">
+                {result.score} / 100
+              </div>
+            </div>
+          </div>
+
+          {/* Expandable Technical Accordion */}
+          <div className="mt-4 space-y-3">
+            
+            {/* Accordion Item 1: Why this decision? */}
+            <details className="group rounded-2xl border border-white/10 bg-space-850/40 p-4 transition-all" open>
+              <summary className="cursor-pointer font-semibold text-sm text-brand-cyan flex items-center justify-between select-none">
+                <span>Why this decision? (PDP Rule Breakdown)</span>
+                <span className="text-xs font-mono text-ink-400 group-open:rotate-180 transition-transform">&darr;</span>
+              </summary>
+              <div className="mt-3 space-y-2 text-xs text-ink-300 pt-2 border-t border-white/5">
+                <p>
+                  Base matrix (<span className="text-white font-medium">{result.sensitivity}</span> sensitivity, <span className="text-white font-medium">{result.riskTier}</span> risk): <b style={{ color: TIER_META[result.baseDecision].color }}>{result.baseDecision}</b>
+                </p>
+                {result.fired.length === 0 ? (
+                  <p className="text-emerald-400">No escalation rules fired. Baseline matrix verdict governs.</p>
+                ) : (
+                  <ul className="space-y-1.5" data-testid="inspector-rules">
+                    {result.fired.map((r) => (
+                      <li key={r.id} className="p-2 rounded-lg bg-space-900/60 border border-white/5 flex items-baseline gap-2">
+                        <code className="text-[11px] font-mono text-brand-cyan">{r.id}</code>
+                        <span>&rarr; enforces minimum <b className="text-white uppercase">{r.decision}</b>. {r.description}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <p className="text-[11px] text-ink-400">
+                  Policies determine the final response: the verdict is the strictest of the base decision and every fired rule.
+                </p>
+              </div>
+            </details>
+
+            {/* Accordion Item 2: User Explanation */}
+            <details className="group rounded-2xl border border-white/10 bg-space-850/40 p-4 transition-all">
+              <summary className="cursor-pointer font-semibold text-sm text-ink-200 hover:text-brand-cyan flex items-center justify-between select-none">
+                <span>What the user sees (PEP User Notice)</span>
+                <span className="text-xs font-mono text-ink-400 group-open:rotate-180 transition-transform">&darr;</span>
+              </summary>
+              <div className="mt-3 text-xs text-ink-200 pt-2 border-t border-white/5 leading-relaxed" data-testid="inspector-explanation">
+                {result.userFacing}
+              </div>
+            </details>
+
+            {/* Accordion Item 3: Contributing Signals */}
+            <details className="group rounded-2xl border border-white/10 bg-space-850/40 p-4 transition-all">
+              <summary className="cursor-pointer font-semibold text-sm text-ink-200 hover:text-brand-cyan flex items-center justify-between select-none">
+                <span>Contributing signals &amp; additive weights</span>
+                <span className="text-xs font-mono text-ink-400 group-open:rotate-180 transition-transform">&darr;</span>
+              </summary>
+              <div className="mt-3 pt-2 border-t border-white/5">
+                <ul className="space-y-1.5 text-xs" data-testid="inspector-signals">
+                  {result.signals.map((s) => (
+                    <li key={s.label} className="flex justify-between items-center py-1 border-b border-white/5 last:border-0">
+                      <span className="text-ink-200 font-medium">{s.label} <span className="text-[11px] text-ink-400 font-mono">({s.category})</span></span>
+                      <span className={`font-mono font-bold ${s.weight < 0 ? 'text-state-ok' : 'text-amber-400'}`}>
+                        {s.weight > 0 ? `+${s.weight}` : s.weight}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </details>
+
+            {/* Accordion Item 4: Scoring Formula */}
+            <details className="group rounded-2xl border border-white/10 bg-space-850/40 p-4 transition-all">
+              <summary className="cursor-pointer font-semibold text-sm text-ink-200 hover:text-brand-cyan flex items-center justify-between select-none">
+                <span>Mathematical scoring equation</span>
+                <span className="text-xs font-mono text-ink-400 group-open:rotate-180 transition-transform">&darr;</span>
+              </summary>
+              <div className="mt-3 pt-2 border-t border-white/5">
+                <div className="rounded-xl bg-space-900/80 border border-white/10 p-3 font-mono text-xs text-ink-300">
+                  Score = <b className="text-brand-cyan">{terms.base}</b> base + <b className="text-brand-cyan">{terms.context}</b> context + <b className="text-brand-cyan">{terms.sequence}</b> sequence + <b className="text-brand-cyan">{terms.timing}</b> timing + <b className="text-brand-cyan">{terms.baseline}</b> baseline &minus; <b className="text-emerald-400">{terms.confidence}</b> confidence = <b className="text-white">{result.score}</b>
+                </div>
+              </div>
+            </details>
+
+          </div>
+
+          <p className="mt-4 text-[11px] text-ink-500 font-mono">
+            Educational mirror of the server Policy Decision Point. The server policy engine remains authoritative.
+          </p>
+        </div>
+
       </div>
     </div>
   );

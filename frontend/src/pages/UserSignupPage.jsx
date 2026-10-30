@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { apiRequest, ApiError } from '../services/apiClient.js';
 import { ErrorBanner } from '../components/common/ErrorBanner.jsx';
 import { Spinner } from '../components/common/Spinner.jsx';
+import { AmbientBackground } from '../components/common/AmbientBackground.jsx';
 
 const MIN_PASSWORD_LENGTH = 6;
 
@@ -51,21 +52,25 @@ export function UserSignupPage() {
   };
 
   const inputClass =
-    'appearance-none rounded-lg relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-400 text-gray-900 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 text-sm';
-  const labelClass = 'block text-xs font-semibold uppercase tracking-wider text-gray-600 mb-1';
+    'block w-full rounded-xl bg-space-900 border border-white/15 px-4 py-2.5 text-sm text-white placeholder-ink-500 focus:outline-none focus:border-brand-cyan focus:ring-1 focus:ring-brand-cyan disabled:opacity-60 transition-all font-mono';
+  const labelClass = 'block text-xs font-semibold uppercase tracking-wider text-ink-300 mb-1.5 font-mono';
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
-      <div className="max-w-md w-full space-y-8 bg-white p-8 rounded-xl shadow-md border border-gray-100">
+    <div className="min-h-screen bg-space-950 text-ink-100 relative overflow-hidden flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8">
+      <AmbientBackground variant="subtle" />
+
+      <div className="max-w-md w-full space-y-8 bg-space-850/90 backdrop-blur-xl p-8 sm:p-10 rounded-2xl shadow-2xl border border-white/10 ring-1 ring-white/5 relative z-10">
         <div>
-          <div className="mx-auto h-12 w-12 bg-indigo-600 rounded-xl flex items-center justify-center text-white font-bold text-xl shadow-md">
-            AG
-          </div>
-          <h2 className="mt-6 text-center text-2xl font-extrabold text-gray-900" data-testid="page-title">
+          <Link to="/" className="inline-block focus:outline-none">
+            <div className="mx-auto h-12 w-12 rounded-xl bg-gradient-to-br from-brand-luminous to-brand-cyan flex items-center justify-center text-white font-extrabold text-xl shadow-lg shadow-brand-luminous/30">
+              AG
+            </div>
+          </Link>
+          <h2 className="mt-5 text-center text-2xl font-extrabold tracking-tight text-white" data-testid="page-title">
             Create Account
           </h2>
-          <p className="mt-2 text-center text-sm text-gray-600">
-            Register for ActionGuard Zero Trust protection
+          <p className="mt-2 text-center text-xs font-mono text-ink-400">
+            Register for continuous Zero Trust session protection
           </p>
         </div>
 
@@ -73,8 +78,8 @@ export function UserSignupPage() {
           <ErrorBanner message={error.message} code={error.code} onDismiss={() => setError(null)} />
         )}
 
-        <form className="mt-8 space-y-6" onSubmit={handleSubmit}>
-          <div className="rounded-md shadow-sm space-y-4">
+        <form className="mt-8 space-y-5" onSubmit={handleSubmit}>
+          <div className="space-y-4">
             <div>
               <label htmlFor="signup-email" className={labelClass}>Email Address</label>
               <input
@@ -125,15 +130,15 @@ export function UserSignupPage() {
           <button
             type="submit"
             disabled={loading}
-            className="group relative w-full flex justify-center py-2.5 px-4 border border-transparent text-sm font-medium rounded-lg text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-colors shadow-sm disabled:opacity-50"
+            className="group relative w-full flex justify-center py-3 px-4 border border-transparent text-sm font-bold rounded-xl text-white bg-gradient-to-r from-brand-blue via-brand-luminous to-brand-cyan shadow-lg shadow-brand-luminous/30 hover:brightness-110 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-brand-cyan transition-all disabled:opacity-50 hover:scale-[1.01]"
           >
             {loading ? <Spinner size="sm" label="Creating account..." /> : 'Sign Up'}
           </button>
         </form>
 
-        <p className="text-center text-sm text-gray-600">
+        <p className="text-center text-xs text-ink-400 pt-2 border-t border-white/5">
           Already have an account?{' '}
-          <Link to="/login" className="font-medium text-indigo-600 hover:text-indigo-700" data-testid="login-link">
+          <Link to="/login" className="font-semibold text-brand-cyan hover:underline underline-offset-4" data-testid="login-link">
             Sign in
           </Link>
         </p>
