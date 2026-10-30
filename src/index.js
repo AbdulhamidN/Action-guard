@@ -25,8 +25,17 @@ const PORT = process.env.PORT || 3000;
 const server = http.createServer(app);
 initSocketServer(server);
 
-server.listen(PORT, () => {
+server.listen(PORT, async () => {
   console.log(`ActionGuard server running on port ${PORT}`);
+
+  if (process.env.AUTO_MIGRATE !== 'false') {
+    try {
+      const { runMigrations } = require('./database/migrate');
+      await runMigrations();
+    } catch (migErr) {
+      console.warn('[Migration] Startup migration check notice:', migErr.message);
+    }
+  }
 
   if (process.env.BASELINE_RECALCULATION_AUTO_START !== 'false') {
     startBaselineRecalculationSchedule();
@@ -75,7 +84,6 @@ async function gracefulShutdown(signal) {
     process.exit(0);
   }
 }
-
 
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));

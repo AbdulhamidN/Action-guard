@@ -10,10 +10,23 @@ async function runMigrations() {
   const files = fs.readdirSync(migrationsDir).filter(f => f.endsWith('.js')).sort();
 
   for (const file of files) {
-    console.log(`[Migration] Applying ${file}...`);
-    const migration = require(path.join(migrationsDir, file));
-    await migration.up(queryInterface, sequelize);
-    console.log(`[Migration] Applied ${file} successfully.`);
+    try {
+      console.log(`[Migration] Applying ${file}...`);
+      const migration = require(path.join(migrationsDir, file));
+      await migration.up(queryInterface, sequelize);
+      console.log(`[Migration] Applied ${file} successfully.`);
+    } catch (migErr) {
+      const isAlreadyExists =
+        migErr.name === 'SequelizeDatabaseError' &&
+        (migErr.message.includes('already exists') ||
+         migErr.original?.code === 'ER_TABLE_EXISTS_ERROR' ||
+         migErr.original?.code === 'ER_DUP_KEYNAME');
+      if (isAlreadyExists) {
+        console.log(`[Migration] ${file} already applied or partially present, continuing.`);
+      } else {
+        throw migErr;
+      }
+    }
   }
 
   console.log('[Migration] All migrations executed successfully.');
