@@ -359,8 +359,10 @@ MaxMind GeoLite2 data is not included in this repository and is subject to MaxMi
 
 **INSA Summer Camp 2026 - Group 2**
 
-- Abdulhamid Nuri Abasimal
-- Adnan Muslim Juma
-- Hayidar Taju Jemal
+## Project Team
+
+- **Abdulhamid Nuri Abasimal** — Backend Developer & Team Leader
+- **Adnan Muslim Juma** — Frontend Developer
+- **Hayidar Taju Jemal** — Frontend–Backend Integration Developer
 
 ---
